@@ -1,0 +1,1146 @@
+/*
+ * P1 SAMPLE SERVER
+ * ---------------
+ * Author: Thoshitha Gamage
+ * Date: 01/29/2025
+ * License: MIT License
+ * Description: This is a sample code for CS447 Spring 2025 P1 server code.
+ */
+
+#include <iostream>
+#include <string>
+#include <cstring>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <cerrno>
+#include <system_error>
+#include <fstream>
+#include <algorithm>
+#include <array>
+#include <optional>
+#include <filesystem>
+#include <format>
+#include <thread>
+#include <chrono>
+#include "p1_helper.h"
+
+#include <unordered_map>
+#include <vector>
+
+#define BACKLOG 10
+#define MAXDATASIZE 100
+
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+
+/*
+* Project 3 notes:
+* Use OpenSSL 3.2.2's SSL_CTX functions to configure the TLS context:
+* SSL_CTX_set_min_proto_version() and SSL_CTX_set_max_proto_version() to set the protocol version exclusively to TLS 1.3
+* SSL_CTX_set_ciphersuites()
+*
+*/
+
+
+
+/*
+* Concurrency ideas:
+* Implement semaphores which are shared between threads
+* #include <semaphore.h>
+* int sem_post and sem_wait functions
+*
+* Implement multithreading
+* 1. Create thread for each connection
+* 2. use mutexes to ensure thread synchronizatio
+* 3. Create a thread pool
+*
+* Implementing the rating system - 
+* can implement a hashmap separate from the client games
+*/
+
+/* 
+* Personal notes
+* - The goal of the project is to further understand socket API
+* Core functionalities:
+* BROWSE Mode
+* - search for games by title, platform, genre, or rating
+* RENT Mode:
+* - check out a game, and/or return a game
+* MYGAMES Mode
+* - Allows you to view the rental history, receive personalized recs,
+* and rate previously rented games
+* 
+* Server should accept requests from TCP clients
+* Server should support concurrency
+* 
+* Implement for client:
+* HELO,
+* HELP,
+* BROWSE (210 code)
+*  1. LIST (250 code, 304 if no video games available)
+*  2. SEARCH (250, 304 if no games matching criteria)
+*  3. SHOW (250, 404 if the game is not found)
+* RENT (220 code)
+*  1. CHECKOUT (250 for ok, 403 if game unavailable, 404 if game not found)
+*  2. RETURN (250 if successfull, 404 if the video game not checked out)
+* MYGAMES
+*  1. HISTORY (250 ok, 304 if no rental history found)
+*  2. RECOMMEND (250 ok, 404 for error)
+*  3. RATE (250 ok, 400 for invalid rating)
+* BYE - 200 OK - can issue *anytime*
+* 
+* Server reply codes: 
+* 200/210/220/230 for command success
+* 304 NO CONTENT for successful request but nothing to send back
+* 250 <data> for sucessfuly request with data return
+* 400 BAD REQUEST - server could not understand due to invalid syntax or missing params
+* 403 FORBIDDEN - indicates server understood the req but refuses to fulfill
+* 404 NOT FOUND - server did not the find request resource
+* 500 INTERNAL SERVER ERROR - server encountered an unexpected condition
+* 
+* The server should be capable of handling multiple simultaneous 
+* client connections (hence concurrency).
+* You have the flexibility to achieve this using either 
+* multi-threading techniques or the fork() system call.
+*/
+
+// !Implement Mutex locking
+// I am pretty sure this works, but I honestly don't fully understand Mutex
+std::mutex mtx;
+
+SSL_CTX* initSSLContext() {
+    const SSL_METHOD* method = TLS_method();
+    SSL_CTX* context = SSL_CTX_new(method);
+    if (!context) {
+        std::cout << "failed to initialize SSL context" << std::endl;
+        exit(1);
+    }
+    int setMin = SSL_CTX_set_min_proto_version(context, TLS1_3_VERSION);
+    int setMax = SSL_CTX_set_max_proto_version(context, TLS1_3_VERSION);
+    if (setMin == -1 || setMax == -1) {
+        std::cout << "failed to set minimum and maximum protocol version" << std::endl;
+        exit(1);
+    }
+
+    return context;
+}
+
+void initCipherSuites(SSL_CTX* context) {
+    const char* TLSCiphers = "TLS_AES_256_GCM_SHA384";
+    int setCipherSuites = SSL_CTX_set_ciphersuites(context, TLSCiphers);
+    if (setCipherSuites != 1) exit(1);
+}
+
+
+
+/*
+* Provides HELP output... kind of a dumb way of doing it, but it is easiest.
+*/
+std::string helpStr(std::string state) {
+    std::string help;
+    if (state == "standard") {
+        help = "Available commands:\nBROWSE - Starts browse mode, allowing user to run:\n\t1. LIST <filter> - the filter option can be either: title, platform, genre, rating.\n\t2. SEARCH <filter> <keyword> - same options for filter as above, with an additional keyword option to reduce query width.\n\t3. SHOW <game_id> [availability] - display details for the game with specified game_id. If [availability] included, only available copies are listed\nRENT - Starts rent mode, allows user to checkout and return videogames:\t1. CHECKOUT <game_id> - allows user to checkout a videogame from the system, updating DB.\n\t2. RETURN <game_id> - allows user to return their checkedout videogame from the system, updating DB.\nMYGAMES - Starts mygames mode, allowing user to manage rented games and explore recommendtions:\n\t1. HISTORY - displays full client rental history if existing.\n\t2. RECOMMEND <filter> - the filter option can be either: platform or genre. The command returns recommendations based on this filter.\n\t3. RATE <game_id> <rating> - user can rate specified game with game_id and provide a rating between 1 and 10 (integer)\nBYE - command to end interaction with the server.\n";
+    }
+    else if (state == "browse") {
+        help = "Available commands:\n1. LIST <filter> - the filter option can be either: title, platform, genre, rating.\n2. SEARCH <filter> <keyword> - same options for filter as above, with an additional keyword option to reduce query width.\n3. SHOW <game_id> [availability] - display details for the game with specified game_id. If [availability] included, only available copies are listed\n";
+    }
+    else if (state == "rent") {
+        help = "Available commands:\n1. CHECKOUT <game_id> - allows user to checkout a videogame from the system, updating DB.\n2. RETURN <game_id> - allows user to return their checkedout videogame from the system, updating DB.\n";
+    }
+    else if (state == "mygames") {
+        help = "Available commands:\n1. HISTORY - displays full client rental history if existing.\n2. RECOMMEND <filter> - the filter option can be either: platform or genre. The command returns recommendations based on this filter.\n3. RATE <game_id> <rating> - user can rate specified game with game_id and provide a rating between 1 and 10 (integer)\n";
+    }
+    else {
+        help = "Failed to fetch help information.";
+    }
+
+    return help;
+}
+
+// Signal handler for SIGCHLD
+void sigchld_handler(int s) {
+    (void)s;
+    int saved_errno = errno;
+    while (waitpid(-1, NULL, WNOHANG) > 0);
+    errno = saved_errno;
+}
+
+// Get sockaddr, IPv4 or IPv6
+void* get_in_addr(struct sockaddr* sa) {
+    if (sa->sa_family == AF_INET) {
+        return &(((struct sockaddr_in*)sa)->sin_addr);
+    }
+    return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
+// Convert string to camel case
+std::string toCamelCase(const std::string& input) {
+    std::string output;
+    bool capitalize = true;
+    for (char c: input) {
+        if (std::isalpha(c)) {
+            output += capitalize? std::toupper(c): std::tolower(c);
+            capitalize =!capitalize;
+        } else {
+            output += c;
+        }
+    }
+    return output;
+}
+
+// Log events with timestamp
+void logEvent(const std::string& message) {
+    auto now = std::chrono::system_clock::now();
+    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+    std::cout << "[" << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d %H:%M:%S") << "] " << message << std::endl;
+}
+
+/*
+* Splits user input/commands into a vector of
+* usable tokens.
+* NOTE for Gamage: Adding removal of ending character
+*/
+std::vector<std::string> splitStr(const std::string& input) {
+    std::string output;
+    std::vector<std::string> vec;
+    std::cout<< input << std::endl;
+
+    std::string newIn = input;
+    while (!newIn.empty() && (newIn.back() == '\r' || newIn.back() == '\n')) {
+        newIn.pop_back();
+    }
+   
+    for (char c: newIn) {
+        if (c == ' ' && !output.empty()) {
+            vec.push_back(output);
+            output.clear();
+       
+        }
+        else if (c != ' ') { output += c; }
+    }
+
+    // end case, if there is any token left to add after last space
+    if (!output.empty()) {
+        vec.push_back(output);
+    }
+
+
+    return vec;
+}
+
+
+/*
+* References Beej's Guide (Chapter 7 Section 4 Handling Partial send()s)
+* https://beej.us/guide/bgnet/html/#sendall
+* In cases where the server is attempting to send too many bytes at once,
+* the message is broken up into multiple sends
+* Need to implement better error handling.
+* I thought this was necessary due to a different bug but it wasn't...
+*/
+int sendAll(const int new_fd, std::string message) {
+    const char* buf = message.c_str();
+    int len = strlen(buf);
+    int total;
+    int bytesLeft = len;
+    int n;             
+    for (total = 0; total < len; total += n) {
+        n = send(new_fd, buf + total, bytesLeft, 0);
+        // if (n == -1 || n == 0) {
+        //     std::cout << "Error in send from HELP" << std::endl << std::flush;
+        //     break;
+        // }
+        bytesLeft -= n;
+    }
+
+    if (n == -1) return -1;
+    return 0;
+}
+
+/*
+* Builds individual strings per game. I realize I could use format
+* but I currently don't know much C++ and am going off of fundamentals.
+*/
+std::string singleStrBuilder(std::vector<Game> games, int idx, bool isClientGames = false, std::unordered_map<int, int> ratings = {}) {
+    std::string buildStr = "";
+    buildStr += "ID: " + std::to_string(games[idx].id);
+    buildStr += ", Title: " + games[idx].title;
+    buildStr += ", Year: " + std::to_string(games[idx].year);
+    buildStr += ", Genre: " + games[idx].genre;
+    buildStr += ", Platform: " + games[idx].platform;
+    buildStr += ", ESRB: " + games[idx].esrb;
+   
+    if (!isClientGames) {
+        if (games[idx].available) {
+            buildStr += ", Available: True";
+        }
+        else {
+            buildStr += ", Available: False";
+        }
+        buildStr += ", # Copies: " + std::to_string(games[idx].copies);
+    }
+
+    if (ratings.contains(games[idx].id)) {
+        buildStr += ", Rating: " + std::to_string(ratings[games[idx].id]);
+    }
+
+    buildStr += "\n";
+
+    return buildStr;
+}
+
+/*
+* Prints out the entire Games vector cleanly
+*/
+std::string strBuilder(std::vector<Game> games, bool isClientGames = false, std::unordered_map<int, int> ratings = {}) {
+    std::string buildStr = "";
+    for (size_t i = 0; i < games.size(); i++) {
+        buildStr += singleStrBuilder(games, i, isClientGames, ratings);
+    }
+    return buildStr;
+}
+
+/* 
+* SEARCH cmd primary function
+* Builds a string that filters based on user input.
+* Also handles situations where user makes syntax errors (user will be sent code 503)
+* or situations where nothing is found matching a valid search (code 304)
+*/
+std::string buildGameSearchStr(std::vector<Game> games, std::vector<std::string> cmd, std::unordered_map<int, int> ratings = {}) {
+    std::string buildStr = "";
+    // For scenarios outside of standard returns
+    std::string invalid = "Invalid";
+    std::string empty = "Empty";
+    // want to check user is searching with a valid filter
+    std::string filter = "";
+    // // default option: no filter
+    // if (cmd.size() == 1) {
+    //     buildStr = strBuilder(games);
+    // }
+    // user did not specify a filter
+    if (cmd.size() != 3) {
+        return invalid;
+    }  
+
+    // Better than a long if statement? Probably not.
+    std::vector<std::string> filters = { "title", "platform", "genre", "rating" };
+    for (size_t i = 0; i < filters.size(); i++) {
+        if (filters[i] == cmd[1]) {
+            filter = filters[i];
+
+        }
+    }
+    if (filter == "") { // if the filter was not found (likely a user typo)
+        return invalid;
+    }
+    
+    for (size_t i = 0; i < games.size(); i++) {
+        if (filter == "title" && cmd[2] == games[i].title) {
+            buildStr += singleStrBuilder(games, i);
+        }
+        if (filter == "platform" && cmd[2] == games[i].platform) {
+            buildStr += singleStrBuilder(games, i);
+        }
+        else if (filter == "genre" && cmd[2] == games[i].genre) {
+            buildStr += singleStrBuilder(games, i);
+        }
+        // ! IMPLEMENT
+        else if (filter == "rating") {
+            int ratingIn;
+            try {
+                ratingIn = std::stoi(cmd[2]);
+            } 
+            catch (const std::invalid_argument& e) {
+                return invalid;
+            } 
+            catch (const std::out_of_range& e) {
+                return invalid;
+            }
+            if (ratingIn == ratings[games[i].id]) {
+                buildStr += singleStrBuilder(games, i);
+            }
+        }
+    }
+
+    if (buildStr == "") {
+        return empty;
+    }
+
+    return buildStr;
+}
+
+/* 
+* Sorts games by title, platform, genre, or rating. 
+* Handles both the client games vector and ratings map...
+*/
+std::vector<Game> sortGames(std::vector<Game> games, std::string sortBy, std::unordered_map<int, int> ratings = {}) {
+    if (sortBy == "title") {
+        std::sort(games.begin(), games.end(), [](Game a, Game b) {
+            return a.title < b.title;
+            }
+        );
+    } else if (sortBy == "platform") {
+        std::sort(games.begin(), games.end(), [](Game a, Game b) {
+            return a.platform < b.platform;
+            }
+        );
+    } else if (sortBy == "genre") {
+        std::sort(games.begin(), games.end(), [](Game a, Game b) {
+                return a.genre < b.genre;
+            }
+        );
+    } else if (sortBy == "rating") {
+        std::sort(games.begin(), games.end(), [&ratings](Game a, Game b) {
+                return ratings[a.id] > ratings[b.id];
+            }
+        );
+    }
+    return games;
+}
+
+
+/*
+* LIST allows the client to list all games from the database,
+* with an optional filter to sort the games by title, platform, genre, or rating.
+*/
+std::string buildListStr(std::vector<Game> games, std::vector<std::string> cmd, std::unordered_map<int, int> ratings = {}) {
+    std::string buildStr = "";
+    std::string invalid = "Invalid";
+    std::string empty = "Empty";
+
+    if (cmd.size() > 2) {
+        return invalid;
+    }
+    if (cmd.size() == 1) {
+        for (size_t i = 0; i < games.size(); i++) {
+            buildStr += "ID: " + std::to_string(games[i].id);
+            buildStr += ", Title: " + games[i].title;
+            buildStr += ", Year: " + std::to_string(games[i].year);
+            buildStr += ", Genre: " + games[i].genre;
+            buildStr += ", Platform: " + games[i].platform;
+            buildStr += ", ESRB: " + games[i].esrb;
+            if (games[i].available) {
+                buildStr += ", Available: True";
+            }
+            else {
+                buildStr += ", Available: False";
+            }
+            buildStr += ", # Copies: " + std::to_string(games[i].copies);
+            if (ratings.contains(games[i].id)) {
+                buildStr += ", Rating: " + std::to_string(ratings[games[i].id]);
+            }
+            buildStr += "\n";
+        }
+    }   
+
+    // filter/sort by cmd 2
+    if (cmd.size() == 2) {
+        // again, could've used a long if statement but...
+        int validFilter = false;
+        std::vector<std::string> filters = { "title", "platform", "genre", "rating" };
+        for (size_t i = 0; i < filters.size(); i++) {
+            if (filters[i] == cmd[1]) {
+                validFilter = true;
+            }
+        }
+        if (!validFilter) return invalid;
+        std::vector<Game> filteredGames = sortGames(games, cmd[1], ratings);
+        buildStr = strBuilder(filteredGames, false, ratings);
+    }
+    return buildStr;
+}
+
+/* 
+* SHOW command primary function 
+*/
+std::string buildShowStr(std::vector<Game> games, std::vector<std::string> cmd) {
+    std::string invalid = "Invalid";
+    std::string empty = "Empty";
+    std::string buildStr = "";
+    int id;
+    if(cmd.size() < 1 || cmd.size() > 3) {
+        return invalid;
+    }
+    if (cmd.size() == 2) {
+
+        try {
+            id = std::stoi(cmd[1]);
+        } catch (const std::invalid_argument& e) {
+            return invalid;
+        } catch (const std::out_of_range& e) {
+            return invalid;
+        }
+        
+        // idk how vectors work in C++. I feel like this is not ideal
+        for (size_t i = 0; i < games.size(); i++) {
+            if (id == games[i].id) {
+                buildStr += singleStrBuilder(games, i); // slow probably
+                break; 
+            }
+        }
+    }
+
+    if (cmd.size() == 3) {
+        try {
+            id = std::stoi(cmd[1]);
+        } 
+        catch (const std::invalid_argument& e) {
+            return invalid;
+        } 
+        catch (const std::out_of_range& e) {
+            return invalid;
+        }
+        if (!(cmd[2] == "availability")) {
+            return invalid;
+        }
+        for (size_t i = 0; i < games.size(); i++) {
+            if (id == games[i].id) {
+                // buildStr += games[i].title + "\n";
+                buildStr += std::to_string(games[i].copies) + "\n";
+                if (games[i].available) {
+                    buildStr += "True\n";
+                }
+                else {
+                    buildStr += "False\n";
+                }
+                break;
+            }
+        }
+    }
+
+    if (buildStr == "") return empty;
+    return buildStr;
+}
+
+
+/*
+* Checks out a game ONLY if it is available.
+* Changes made by one client can be viewed by all other clients.
+* Client checkouts affect what other clients can check out.
+*/
+std::string checkoutGame(std::vector<Game>& games, std::vector<std::string> cmd, std::vector<Game>& clientGames) {
+    std::string invalid = "Invalid";
+    std::string empty = "Empty";
+    std::string buildStr = "";
+    int id;
+
+    // may be editing the games vector.
+    // probably could've done this later in the function.
+    std::lock_guard<std::mutex> lock(mtx);
+
+    if(cmd.size() != 2) {
+        return invalid;
+    }
+
+    try {
+        id = std::stoi(cmd[1]);
+    } 
+    catch (const std::invalid_argument& e) {
+        return invalid;
+    } 
+    catch (const std::out_of_range& e) {
+        return invalid;
+    }
+    bool gameFound = false;
+    bool checkoutSuccess = false;
+    for (size_t i = 0; i < games.size(); i++) {
+        if (id == games[i].id) {
+            gameFound = true;
+            if (games[i].copies == 0) break;
+            
+            games[i].copies -= 1;
+            if (games[i].copies == 0) {
+                games[i].available = false;
+            }
+            checkoutSuccess = true;
+            clientGames.push_back(games[i]);
+            break;
+        }
+    }
+
+    if (!gameFound) {
+        return empty;
+    }
+    if (checkoutSuccess) return "250 SUCCESS.";
+    return "403 Game unavailable.";
+}
+
+
+/*
+* Returns a game IF the user has it checked out.
+* Same with checkout, this affects the availability of a game for all clients.
+*/
+std::string returnGame(std::vector<Game>& games, std::vector<std::string> cmd, std::vector<Game>& clientGames, bool isBye = false) {
+    std::string invalid = "Invalid";
+    std::string empty = "Empty";
+    std::string buildStr = "";
+
+    // may be editing the games vector.
+    // probably could've done this later in the function.
+    std::lock_guard<std::mutex> lock(mtx);
+
+    int id;
+    if(cmd.size() != 2) {
+        return invalid;
+    }
+
+    try {
+        id = std::stoi(cmd[1]);
+    } 
+    catch (const std::invalid_argument& e) {
+        return invalid;
+    } 
+    catch (const std::out_of_range& e) {
+        return invalid;
+    }
+
+    bool gameFound = false;
+
+    for (size_t i = 0; i < clientGames.size(); i++) {
+        if (clientGames[i].id == id) {
+            clientGames.erase(clientGames.begin() + i);
+            gameFound = true;
+            break;
+        }
+    }
+    if (!gameFound) {
+        return empty; // 404 in this case
+    }
+
+    for (size_t i = 0; i < games.size(); i++) {
+        if (id == games[i].id) {
+            gameFound = true;
+            if (games[i].copies == 0) {
+                games[i].available = true;
+            }
+            games[i].copies += 1;
+            break;
+        }
+    }
+    if (!isBye) return "250 SUCCESS.";
+    return "returned";
+}
+
+/*
+* Returns all games a client has checked out when they run BYE.
+* This affect does not happen in the case that a client force kills
+* a process.
+*/
+void cleanOnBye(std::vector<Game>& games, std::vector<Game>& clientGames) {
+    for (size_t i = 0; i < clientGames.size(); i++) {
+        for (size_t j = 0; j < games.size(); j++) {
+            if (clientGames[i].id == games[j].id) {
+                if (games[j].copies == 0) {
+                    games[j].available = true;
+                }
+                games[j].copies += 1;
+                break;
+            }
+        }
+    }
+    clientGames.clear();
+}
+
+/* 
+* Shows everything a client currently has checked out.
+*/
+std::string buildHistoryStr(std::vector<Game>& clientGames, std::unordered_map<int, int> ratings) {
+    std::string buildStr = "";
+    std::string empty = "Empty";
+
+    if (clientGames.size() > 0) {
+        buildStr += "250 SUCCESS. History:\n";
+    }
+    buildStr += strBuilder(clientGames, true, ratings);
+    if (buildStr == "") return empty;
+    return buildStr;
+}
+
+/*
+ * Builds recommendations based on user rating history
+ * Whichever genre or platform the user has a tendency to rate
+ * games higher than a 6 is returned to the user along with the 
+ * games the server has from that genre. 
+ * If the user does not specify a filter, 
+ * then the server returns a random recommendaton
+ */
+std::string buildRecStr( // ugly formatting
+    // ! Filter out games that are already in user collection!!!
+    std::vector<Game> games, 
+    std::vector<Game> clientGames, 
+    std::vector<std::string> cmd,
+    std::unordered_map<int, int> ratings
+) {
+    std::string buildStr = "";
+    std::string invalid = "Invalid";
+    std::string empty = "Empty";
+    std::string filter;
+
+    if (cmd.size() > 2) return invalid;
+
+    if (cmd.size() == 2) {
+        filter = cmd[1];
+        if (filter != "genre" && filter != "platform") return invalid;
+    }
+    else { filter = ""; }
+
+    if (filter != "" && (clientGames.size() > 0)) {
+
+        /* 
+        * If a user tends to rate games highly in a specific genre
+        * or platform, provide the user with games in that 
+        * specific genre/platform.
+        */
+        std::unordered_map<std::string, int> filterOccurences;
+
+        std::vector<int> idsChecked;
+        for (size_t i = 0; i < clientGames.size(); i++) {
+            if (std::find(idsChecked.begin(), idsChecked.end(), clientGames[i].id) == idsChecked.end()) {
+                if (ratings[clientGames[i].id] > 6) {
+                    if (filter == "genre") {
+                    filterOccurences[clientGames[i].genre]++;
+                    }
+                    else if (filter == "platform") {
+                    filterOccurences[clientGames[i].platform]++;
+                    }
+                }
+                idsChecked.push_back(clientGames[i].id);
+            }
+        }
+
+        int maxVal = -1;
+        std::string maxValKey = "";
+
+        for (const auto& kv : filterOccurences) {
+            if (kv.second > maxVal) {
+                maxVal = kv.second;
+                maxValKey = kv.first;
+            }
+        }
+
+        // may want to consider also filtering out unavailable games
+        buildStr += "250 SUCCESS. We saw you tend to like " + maxValKey;
+        buildStr += ", so we found these games for you:\n";
+        bool itemFound = false;
+        for (size_t i = 0; i < games.size(); i++) {
+            if (filter == "genre" && games[i].genre == maxValKey) {
+                buildStr += singleStrBuilder(games, i);
+                itemFound = true;
+            }
+            else if (filter == "platform" && games[i].platform == maxValKey) {
+                buildStr += singleStrBuilder(games, i);
+                itemFound = true;
+            }
+        }
+
+        if (itemFound) return buildStr;
+        else return "404 No worthy recommendations found.";
+        // evaluate which genre or platform occurs most
+    }
+
+    if (filter == "" && games.size() > 0) {
+        int idx = std::rand() % games.size();
+        buildStr += "250 SUCCESS. You didn't specify a filter, so we chose a random game you might like:\n";
+        buildStr += singleStrBuilder(games, idx);
+        return buildStr;
+    }
+  
+    
+    return empty;
+}
+
+/*
+ * Simply allows the user to rate games in a range from 1-10,
+ * handling outliers if needed.
+*/
+std::string rateGame(std::vector<Game> clientGames, std::vector<std::string> cmd, std::unordered_map<int, int>& ratings) {
+    std::string invalid = "Invalid";
+    std::string empty = "Empty";
+    int id;
+    int rating;
+
+    if (cmd.size() != 3) return invalid;
+    try {
+        id = std::stoi(cmd[1]);
+        rating = std::stoi(cmd[2]);
+    } 
+    catch (const std::invalid_argument& e) {
+        return invalid;
+    } 
+    catch (const std::out_of_range& e) {
+        return invalid;
+    }
+    if (rating < 1 || rating > 10) return invalid;
+
+    bool idFound = false;
+    for (size_t i = 0; i < clientGames.size(); i++) {
+        if (clientGames[i].id == id) {
+            idFound = true;
+            ratings[id] = rating;
+            break;
+        }
+    }
+
+    if (!idFound) return "400 BAD REQUEST: Invalid rating.";
+    return "250 SUCCESS. Rated game.";
+}
+
+
+int main(int argc, char* argv[]) {
+    int sockfd, new_fd;
+    struct addrinfo hints, *servinfo, *p;
+    struct sockaddr_storage their_addr;
+    socklen_t sin_size;
+    struct sigaction sa;
+    int yes = 1;
+    char s[INET6_ADDRSTRLEN]; // client addr
+    char server_addr[INET6_ADDRSTRLEN]; // server addr
+
+    // used Linux man page https://www.man7.org/linux/man-pages/man2/gethostname.2.html
+    char hostname[HOST_NAME_MAX];
+    gethostname(hostname, sizeof(hostname));
+
+    int rv;
+
+    SSL_CTX* context = initSSLContext();
+    initCipherSuites(context);
+
+
+    // database
+    const std::string DB_NAME = "games.db";
+    // vector from the database
+    std::vector<Game> gamesVec = loadGamesFromFile(DB_NAME);
+
+    std::memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+
+    if (argc != 2) {
+        std::cerr << std::format("Usage: {} <config_file>\n", *argv);
+        return 1;
+    }
+
+    std::string configFileName = argv[1];
+    std::optional<std::string> port;
+
+    std::filesystem::path configFilePath(configFileName);
+    if (!std::filesystem::is_regular_file(configFilePath)) {
+        std::cerr << std::format("Error opening configuration file: {}\n", configFileName);
+        return 1;
+    }
+
+    std::ifstream configFile(configFileName);
+    std::string line;
+    while (std::getline(configFile, line)) {
+        std::string_view lineView(line);
+        if (lineView.substr(0, 5) == "PORT=") {
+            port = lineView.substr(5);
+            break;
+        }
+    }
+    configFile.close();
+
+    if (!port.has_value()) {
+        std::cerr << "Port number not found in configuration file!\n";
+        return 1;
+    }
+
+    if ((rv = getaddrinfo(nullptr, port->c_str(), &hints, &servinfo))!= 0) {
+        std::cerr << std::format("getaddrinfo: {}\n", gai_strerror(rv));
+        return 1;
+    }
+
+    // Loop through all the results and bind to the first we can
+    for (p = servinfo; p!= NULL; p = p->ai_next) {
+        if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
+            std::perror("server: socket");
+            continue;
+        }
+
+        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
+            throw std::system_error(errno, std::generic_category(), "setsockopt");
+        }
+
+        if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
+            close(sockfd);
+            std::perror("server: bind");
+            continue;
+        }
+
+        // get server address
+        // I thought this was a necessary step, turns out it isn't.
+        inet_ntop(p->ai_family, get_in_addr((struct sockaddr*)p->ai_addr), server_addr, sizeof server_addr);
+        break;
+    }
+
+    freeaddrinfo(servinfo);
+
+    if (p == NULL) {
+        std::cerr << "server: failed to bind\n";
+        return 2;
+    }
+
+    if (listen(sockfd, BACKLOG) == -1) {
+        throw std::system_error(errno, std::generic_category(), "listen");
+    }
+
+    sa.sa_handler = sigchld_handler; // Reap all dead processes
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    if (sigaction(SIGCHLD, &sa, NULL) == -1) {
+        throw std::system_error(errno, std::generic_category(), "sigaction");
+    }
+
+    std::cout << "server: waiting for connections...\n";
+
+    while (true) {
+        sin_size = sizeof their_addr;
+        new_fd = accept(sockfd, (struct sockaddr*)&their_addr, &sin_size);
+        if (new_fd == -1) {
+            std::perror("accept");
+            continue;
+        }
+
+        inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr*)&their_addr), s, sizeof s);
+        logEvent("Connection from: " + std::string(s));
+
+        // Create a new thread to handle the client communication
+        std::thread clientThread([new_fd, s, server_addr, &gamesVec, hostname]() {
+            std::array<char, MAXDATASIZE> buf;
+            int numbytes;
+
+            // Some of the common/frequently used codes
+            const std::string BAD_SEQ_CODE = "503 BAD SEQUENCE: Bad sequence of commands.";
+            const std::string NO_MATCH = "304 NO CONTENT: No video games found matching the filter criteria.";
+            const std::string BYE = "200 BYE";
+
+
+
+            // manage state (e.g. browse, mygames, or standard)
+            std::string state = "standard"; // maybe change to enum
+
+            // has the user completed the HELO 'handshake' ?
+            bool heloInit = false;
+
+            // games the client has successfully checked out
+            std::vector<Game> clientGames = std::vector<Game>();
+
+            // unfortunately this was the easiest way to add ratings...
+            // makes the code a lot uglier without adding a rating field to Game object
+            // key: Game ID, value: rating
+            std::unordered_map<int, int> clientRatings = std::unordered_map<int, int>();
+
+            while (true) {
+                if ((numbytes = recv(new_fd, buf.data(), MAXDATASIZE - 1, 0)) == -1) {
+                    perror("recv");
+                    exit(1);
+                } else if (numbytes == 0) {
+                    logEvent("Client disconnected: " + std::string(s));
+                    break;
+                }
+
+                buf[numbytes] = '\0';
+                std::string receivedMsg(buf.data());
+                std::vector<std::string> clientCmdVec = splitStr(receivedMsg);
+                std::string cmd = clientCmdVec[0];
+
+                // what even is a switch statement? *jokes*
+                if (heloInit && cmd == "BYE") {
+                    // be sure to run a clean up function
+                    std::string byeRes = BYE;
+
+                    cleanOnBye(gamesVec, clientGames);
+                    if (sendAll(new_fd, byeRes) == -1) {
+                        perror("send");
+                    }
+                    heloInit = false;
+                    break;
+                }
+                else if (cmd == "HELO" && (clientCmdVec[1] == s || clientCmdVec[1] == hostname)) {
+                    // need to return with client addr back to them
+                    std::string heloRes = "200 HELO " + std::string(s) + " (TCP)"; 
+                    if (state != "standard") state = "standard"; // just reinit state if necessary
+                    if (sendAll(new_fd, heloRes) == -1) {
+                        perror("send");
+                    } 
+                    heloInit = true;
+                } 
+                // should only be available if HELO initialized
+                else if (heloInit && cmd == "HELP" && clientCmdVec.size() == 1) {
+                    std::string helpRes;
+                    helpRes = helpStr(state);
+
+                    sendAll(new_fd, helpRes);
+                }
+                else if (heloInit && cmd == "BROWSE" && clientCmdVec.size() == 1) {
+                    state = "browse";
+                    std::string browseRes = "210 Switched to BROWSE mode.";
+                    if (sendAll(new_fd, browseRes) == -1) {
+                        perror("send");
+                    }
+                }
+                else if (heloInit && cmd == "RENT" && clientCmdVec.size() == 1) {
+                    state = "rent";
+                    std::string rentRes = "220 Switched to RENT Mode.";
+                    if (sendAll(new_fd, rentRes) == -1) {
+                        perror("send");
+                    }
+                }
+                else if (heloInit && cmd == "MYGAMES" && clientCmdVec.size() == 1) {
+                    state = "mygames";
+                    std::string myGamesRes = "230 Switched to MYGAMES Mode.";
+                    if (sendAll(new_fd, myGamesRes) == -1) {
+                        perror("send");
+                    }
+                }
+                else if (heloInit && cmd == "SEARCH") { // Done but test
+                    // user can initiate 
+                    std::string searchRes;
+                    if (state == "browse") { // only valid in browse state
+                        searchRes = buildGameSearchStr(gamesVec, clientCmdVec, clientRatings);
+                        if (searchRes == "Invalid") {
+                            searchRes = BAD_SEQ_CODE;
+                        }
+                        if (searchRes == "Empty") {
+                            searchRes = NO_MATCH;
+                        }
+                    }
+                    else {
+                        searchRes = BAD_SEQ_CODE;
+                    }
+
+                    if (sendAll(new_fd, searchRes) == -1) {
+                        perror("send");
+                    }
+                }
+                else if (heloInit && cmd == "LIST") { // Need to finish
+                    // user can initiate 
+                    std::string searchRes;
+                    if (state == "browse") { // search is only valid in browse
+                        searchRes = buildListStr(gamesVec, clientCmdVec, clientRatings);
+                        if (searchRes == "Invalid") {
+                            searchRes = BAD_SEQ_CODE;
+                        }
+                        if (searchRes == "Empty") {
+                            searchRes = NO_MATCH;
+                        }
+                    }
+                    else {
+                        searchRes = BAD_SEQ_CODE;
+                    }
+                    if (sendAll(new_fd, searchRes) == -1) {
+                        perror("send");
+                    }
+                }
+                else if (heloInit && cmd == "SHOW") { // Done but test
+                    std::string showRes;
+                    if (state == "browse") { // search is only valid in browse
+                        showRes = buildShowStr(gamesVec, clientCmdVec);
+                         if (showRes == "Invalid") {
+                            showRes = BAD_SEQ_CODE;
+                        }
+                        if (showRes == "Empty") {
+                            showRes = NO_MATCH;
+                        }
+                    }
+                    else {
+                        showRes = BAD_SEQ_CODE;
+                    }
+                    if (sendAll(new_fd, showRes) == -1) {
+                        perror("send");
+                    }
+                }
+                else if (heloInit && cmd == "CHECKOUT") {
+                    std::string checkRes;
+                    if (state == "rent") { // search is only valid in browse
+                        checkRes = checkoutGame(gamesVec, clientCmdVec, clientGames);
+                        if (checkRes == "Invalid") checkRes = BAD_SEQ_CODE;
+                        // if (searchRes == "Empty") searchRes = "404 Game not checked out by client."
+                    }
+                    else {
+                        checkRes = BAD_SEQ_CODE;
+                    }
+                    if (sendAll(new_fd, checkRes) == -1) {
+                        perror("send");
+                    }
+                }
+                else if (heloInit && cmd == "RETURN") {
+                    std::string returnRes;
+                    if (state == "rent") { // search is only valid in browse
+                        returnRes = returnGame(gamesVec, clientCmdVec, clientGames);
+                        if (returnRes == "Empty") {
+                            returnRes = "404 NOT CHECKED OUT.";
+                        }
+                    }
+                    else {
+                        returnRes = BAD_SEQ_CODE;
+                    }
+                    if (sendAll(new_fd, returnRes) == -1) {
+                        perror("send");
+                    }
+                }
+                else if (heloInit && cmd == "HISTORY") {
+                    std::string historyRes;
+                    if (state == "mygames") { // search is only valid in browse
+                        historyRes = buildHistoryStr(clientGames, clientRatings);
+                        if (historyRes == "Empty") historyRes = "304 NO CONTENT: No rental history found.";
+                    }
+                    else {
+                        historyRes = BAD_SEQ_CODE;
+                    }
+                    if (sendAll(new_fd, historyRes) == -1) {
+                        perror("send");
+                    }
+                }
+                else if (heloInit && cmd == "RECOMMEND") {
+                    std::string searchRes;
+                    if (state == "mygames") { // search is only valid in browse
+                        searchRes = buildRecStr(gamesVec, clientGames, clientCmdVec, clientRatings);
+                        if (searchRes == "Invalid") searchRes = "503 Bad sequence of commands.";
+                    }
+                    else {
+                        searchRes = BAD_SEQ_CODE;
+                    }
+                    if (sendAll(new_fd, searchRes) == -1) {
+                        perror("send");
+                    }
+                }
+                else if (heloInit && cmd == "RATE") { 
+                    std::string searchRes;
+                    if (state == "mygames") { // search is only valid in browse
+                        searchRes = rateGame(clientGames, clientCmdVec, clientRatings);
+                        if (searchRes == "Invalid") searchRes = "400 BAD REQUEST: Invalid rating.";
+                    }
+                    else {
+                        searchRes = BAD_SEQ_CODE;
+                    }
+                    if (sendAll(new_fd, searchRes) == -1) {
+                        perror("send");
+                    }
+                }
+                else {
+                    std::string badReqRes = "400 BAD REQUEST";
+                    if (sendAll(new_fd, badReqRes.c_str()) == -1) {
+                        std::string internalError = "500 INTERNAL SERVER ERROR";
+                        // this code is so bad...
+                        if (sendAll(new_fd, internalError.c_str()) == -1) {
+                            perror("send");
+                        }
+                    }
+                }
+            }
+
+            close(new_fd);
+        });
+
+        clientThread.detach();
+    }
+
+    return 0;
+}
