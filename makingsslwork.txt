@@ -1,0 +1,109 @@
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <iostream>
+#include <cstring>
+#include <string>
+
+// Initialize OpenSSL and create an SSL context
+SSL_CTX* initializeSSL(const char* certFile, const char* keyFile) {
+    SSL_library_init();
+    OpenSSL_add_all_algorithms();
+    SSL_load_error_strings();
+
+    // Create a new SSL context
+    SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+    if (!ctx) {
+        std::cerr << "Error creating SSL context" << std::endl;
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
+    }
+
+    // Load the server certificate and private key
+    if (SSL_CTX_use_certificate_file(ctx, certFile, SSL_FILETYPE_PEM) <= 0) {
+        std::cerr << "Error loading certificate file" << std::endl;
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
+    }
+
+    if (SSL_CTX_use_PrivateKey_file(ctx, keyFile, SSL_FILETYPE_PEM) <= 0) {
+        std::cerr << "Error loading private key file" << std::endl;
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
+    }
+
+    // Verify that the private key matches the certificate
+    if (!SSL_CTX_check_private_key(ctx)) {
+        std::cerr << "Private key does not match the certificate" << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    return ctx;
+}
+
+// Wrap the socket in SSL and perform the handshake
+SSL* wrapSocketWithSSL(SSL_CTX* ctx, int clientSocket) {
+    SSL* ssl = SSL_new(ctx);
+    if (!ssl) {
+        std::cerr << "Error creating SSL object" << std::endl;
+        ERR_print_errors_fp(stderr);
+        return nullptr;
+    }
+
+    SSL_set_fd(ssl, clientSocket);
+
+    // Perform the SSL/TLS handshake
+    if (SSL_accept(ssl) <= 0) {
+        std::cerr << "Error during SSL handshake" << std::endl;
+        ERR_print_errors_fp(stderr);
+        SSL_free(ssl);
+        return nullptr;
+    }
+
+    return ssl;
+}
+
+// Example usage in your server
+int main() {
+    const char* certFile = "server.crt"; // Path to your certificate file
+    const char* keyFile = "server.key"; // Path to your private key file
+
+    // Initialize SSL
+    SSL_CTX* ctx = initializeSSL(certFile, keyFile);
+
+    // Set up your server socket (not shown here)
+    int serverSocket = /* your socket setup code */;
+    listen(serverSocket, SOMAXCONN);
+
+    while (true) {
+        // Accept a client connection
+        int clientSocket = accept(serverSocket, nullptr, nullptr);
+        if (clientSocket < 0) {
+            std::cerr << "Error accepting client connection" << std::endl;
+            continue;
+        }
+
+        // Wrap the client socket with SSL
+        SSL* ssl = wrapSocketWithSSL(ctx, clientSocket);
+        if (!ssl) {
+            close(clientSocket);
+            continue;
+        }
+
+        // Now you can use SSL_read and SSL_write for communication
+        char buffer[1024] = {0};
+        int bytes = SSL_read(ssl, buffer, sizeof(buffer));
+        if (bytes > 0) {
+            std::cout << "Received: " << buffer << std::endl;
+            SSL_write(ssl, "Hello, TLS client!", 18);
+        }
+
+        // Clean up
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        close(clientSocket);
+    }
+
+    // Clean up SSL context
+    SSL_CTX_free(ctx);
+    return 0;
+}

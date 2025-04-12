@@ -115,19 +115,22 @@
 std::mutex mtx;
 
 SSL_CTX* initSSLContext() {
+    SSL_library_init();
+    OpenSSL_add_ssl_algorithms();
+    SSL_load_error_strings();
     const SSL_METHOD* method = TLS_method();
     SSL_CTX* context = SSL_CTX_new(method);
     if (!context) {
-        std::cout << "failed to initialize SSL context" << std::endl;
         exit(1);
     }
-    int setMin = SSL_CTX_set_min_proto_version(context, TLS1_3_VERSION);
-    int setMax = SSL_CTX_set_max_proto_version(context, TLS1_3_VERSION);
-    if (setMin == -1 || setMax == -1) {
-        std::cout << "failed to set minimum and maximum protocol version" << std::endl;
+    if (!SSL_CTX_set_min_proto_version(context, TLS1_3_VERSION) || 
+        !SSL_CTX_set_max_proto_version(context, TLS1_3_VERSION)) {
+
+        SSL_CTX_free(context);
         exit(1);
     }
 
+    std::cout << "context initialized" << std::endl;
     return context;
 }
 
@@ -135,9 +138,28 @@ void initCipherSuites(SSL_CTX* context) {
     const char* TLSCiphers = "TLS_AES_256_GCM_SHA384";
     int setCipherSuites = SSL_CTX_set_ciphersuites(context, TLSCiphers);
     if (setCipherSuites != 1) exit(1);
+    std::cout << "cipher suite initialized" << std::endl;
 }
 
+void validateCertAndKey(SSL_CTX* context) {
+    if (SSL_CTX_use_certificate_file(context, "p3server.crt", SSL_FILETYPE_PEM) <= 0 ||
+        SSL_CTX_use_PrivateKey_file(context, "p3server.key", SSL_FILETYPE_PEM) <= 0 ||
+        !SSL_CTX_check_private_key(context)) {
+        SSL_CTX_free(context);
+        exit(1);
+    }
+    std::cout << "private key matches cert" << std::endl;
+}
 
+SSL* initSSLSocket(SSL_CTX* context, int socket) {
+    SSL* SSL = SSL_new(context);
+
+    SSL_set_fd(SSL, socket);
+    int acceptStatus = SSL_accept(SSL);
+    if (acceptStatus > 0) return SSL;
+    SSL_free(SSL);
+    exit(1);   
+}
 
 /*
 * Provides HELP output... kind of a dumb way of doing it, but it is easiest.
@@ -209,7 +231,7 @@ void logEvent(const std::string& message) {
 std::vector<std::string> splitStr(const std::string& input) {
     std::string output;
     std::vector<std::string> vec;
-    std::cout<< input << std::endl;
+    // std::cout<< input << std::endl;
 
     std::string newIn = input;
     while (!newIn.empty() && (newIn.back() == '\r' || newIn.back() == '\n')) {
@@ -243,14 +265,14 @@ std::vector<std::string> splitStr(const std::string& input) {
 * Need to implement better error handling.
 * I thought this was necessary due to a different bug but it wasn't...
 */
-int sendAll(const int new_fd, std::string message) {
+int sendAll(SSL* SSL, std::string message) {
     const char* buf = message.c_str();
     int len = strlen(buf);
     int total;
     int bytesLeft = len;
     int n;             
     for (total = 0; total < len; total += n) {
-        n = send(new_fd, buf + total, bytesLeft, 0);
+        n = SSL_write(SSL, buf + total, bytesLeft);
         // if (n == -1 || n == 0) {
         //     std::cout << "Error in send from HELP" << std::endl << std::flush;
         //     break;
@@ -809,6 +831,7 @@ int main(int argc, char* argv[]) {
 
     SSL_CTX* context = initSSLContext();
     initCipherSuites(context);
+    validateCertAndKey(context);
 
 
     // database
@@ -911,7 +934,8 @@ int main(int argc, char* argv[]) {
         logEvent("Connection from: " + std::string(s));
 
         // Create a new thread to handle the client communication
-        std::thread clientThread([new_fd, s, server_addr, &gamesVec, hostname]() {
+        std::thread clientThread([new_fd, context, s, server_addr, &gamesVec, hostname]() {
+            SSL* SSL = initSSLSocket(context, new_fd);
             std::array<char, MAXDATASIZE> buf;
             int numbytes;
 
@@ -937,7 +961,7 @@ int main(int argc, char* argv[]) {
             std::unordered_map<int, int> clientRatings = std::unordered_map<int, int>();
 
             while (true) {
-                if ((numbytes = recv(new_fd, buf.data(), MAXDATASIZE - 1, 0)) == -1) {
+                if ((numbytes = recv(SSL_get_fd(SSL), buf.data(), MAXDATASIZE - 1, 0)) == -1) {
                     perror("recv");
                     exit(1);
                 } else if (numbytes == 0) {
@@ -956,7 +980,7 @@ int main(int argc, char* argv[]) {
                     std::string byeRes = BYE;
 
                     cleanOnBye(gamesVec, clientGames);
-                    if (sendAll(new_fd, byeRes) == -1) {
+                    if (sendAll(SSL, byeRes) == -1) {
                         perror("send");
                     }
                     heloInit = false;
@@ -966,7 +990,7 @@ int main(int argc, char* argv[]) {
                     // need to return with client addr back to them
                     std::string heloRes = "200 HELO " + std::string(s) + " (TCP)"; 
                     if (state != "standard") state = "standard"; // just reinit state if necessary
-                    if (sendAll(new_fd, heloRes) == -1) {
+                    if (sendAll(SSL, heloRes) == -1) {
                         perror("send");
                     } 
                     heloInit = true;
@@ -976,26 +1000,26 @@ int main(int argc, char* argv[]) {
                     std::string helpRes;
                     helpRes = helpStr(state);
 
-                    sendAll(new_fd, helpRes);
+                    sendAll(SSL, helpRes);
                 }
                 else if (heloInit && cmd == "BROWSE" && clientCmdVec.size() == 1) {
                     state = "browse";
                     std::string browseRes = "210 Switched to BROWSE mode.";
-                    if (sendAll(new_fd, browseRes) == -1) {
+                    if (sendAll(SSL, browseRes) == -1) {
                         perror("send");
                     }
                 }
                 else if (heloInit && cmd == "RENT" && clientCmdVec.size() == 1) {
                     state = "rent";
                     std::string rentRes = "220 Switched to RENT Mode.";
-                    if (sendAll(new_fd, rentRes) == -1) {
+                    if (sendAll(SSL, rentRes) == -1) {
                         perror("send");
                     }
                 }
                 else if (heloInit && cmd == "MYGAMES" && clientCmdVec.size() == 1) {
                     state = "mygames";
                     std::string myGamesRes = "230 Switched to MYGAMES Mode.";
-                    if (sendAll(new_fd, myGamesRes) == -1) {
+                    if (sendAll(SSL, myGamesRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1015,7 +1039,7 @@ int main(int argc, char* argv[]) {
                         searchRes = BAD_SEQ_CODE;
                     }
 
-                    if (sendAll(new_fd, searchRes) == -1) {
+                    if (sendAll(SSL, searchRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1034,7 +1058,7 @@ int main(int argc, char* argv[]) {
                     else {
                         searchRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(new_fd, searchRes) == -1) {
+                    if (sendAll(SSL, searchRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1052,7 +1076,7 @@ int main(int argc, char* argv[]) {
                     else {
                         showRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(new_fd, showRes) == -1) {
+                    if (sendAll(SSL, showRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1066,7 +1090,7 @@ int main(int argc, char* argv[]) {
                     else {
                         checkRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(new_fd, checkRes) == -1) {
+                    if (sendAll(SSL, checkRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1081,7 +1105,7 @@ int main(int argc, char* argv[]) {
                     else {
                         returnRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(new_fd, returnRes) == -1) {
+                    if (sendAll(SSL, returnRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1094,7 +1118,7 @@ int main(int argc, char* argv[]) {
                     else {
                         historyRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(new_fd, historyRes) == -1) {
+                    if (sendAll(SSL, historyRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1107,7 +1131,7 @@ int main(int argc, char* argv[]) {
                     else {
                         searchRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(new_fd, searchRes) == -1) {
+                    if (sendAll(SSL, searchRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1120,16 +1144,16 @@ int main(int argc, char* argv[]) {
                     else {
                         searchRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(new_fd, searchRes) == -1) {
+                    if (sendAll(SSL, searchRes) == -1) {
                         perror("send");
                     }
                 }
                 else {
                     std::string badReqRes = "400 BAD REQUEST";
-                    if (sendAll(new_fd, badReqRes.c_str()) == -1) {
+                    if (sendAll(SSL, badReqRes.c_str()) == -1) {
                         std::string internalError = "500 INTERNAL SERVER ERROR";
                         // this code is so bad...
-                        if (sendAll(new_fd, internalError.c_str()) == -1) {
+                        if (sendAll(SSL, internalError.c_str()) == -1) {
                             perror("send");
                         }
                     }
@@ -1142,5 +1166,6 @@ int main(int argc, char* argv[]) {
         clientThread.detach();
     }
 
+    SSL_CTX_free(context);
     return 0;
 }
