@@ -114,6 +114,8 @@
 // I am pretty sure this works, but I honestly don't fully understand Mutex
 std::mutex mtx;
 
+bool srandInit = false;
+
 SSL_CTX* initSSLContext() {
     SSL_library_init();
     OpenSSL_add_ssl_algorithms();
@@ -160,6 +162,88 @@ SSL* initSSLSocket(SSL_CTX* context, int socket) {
     SSL_free(SSL);
     exit(1);   
 }
+
+// taken from my project 2
+// convert password strength check to is own function
+std::string genRandom() {
+    std::string chars;
+    size_t stringLength;
+
+    chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*_-+=."; 
+    stringLength = 8;
+    
+    std::string rand;
+    if (!srandInit) {
+        std::srand(std::time(0));
+        srandInit = true;
+    }
+
+    bool containsUpper = false;
+    bool containsLower = false;
+    bool containsSymbol = false;
+    bool containsNum = false;
+    while (true) {
+        for (size_t i = 0; i < stringLength; i++) {
+            rand += chars[std::rand() % chars.size()];
+        }
+        if (std::any_of(rand.begin(), rand.begin() + 1, [](char c) {
+            return std::string("!@#$%&*_-+=.").find(c) != std::string::npos;
+        })) {
+            // invalid password
+            rand = "";
+            continue;
+        }
+        if (std::any_of(rand.begin(), rand.end(), [](char c) {
+            return std::string("!@#$%&*_-+=.").find(c) != std::string::npos;
+        })) {
+            containsSymbol = true;
+        }
+        if (std::any_of(rand.begin(), rand.end(), [](char c) {
+            return std::string("ABCDEFGHIJKLMNOPQRSTUVWXYZ").find(c) != std::string::npos;
+        })) {
+            containsUpper = true;
+        }
+        if (std::any_of(rand.begin(), rand.end(), [](char c) {
+            return std::string("abcdefghijklmnopqrstuvwxyz").find(c) != std::string::npos;
+        })) {
+            containsLower = true;
+        }
+        if (std::any_of(rand.begin(), rand.end(), [](char c) {
+            return std::string("0123456789").find(c) != std::string::npos;
+        })) {
+            containsNum = true;
+        }
+
+        if (!(containsLower && containsNum && containsUpper && containsSymbol)) {
+            rand = "";
+            continue;
+        } else {
+            return rand;
+        }
+    }
+}
+
+// The password must include at least one uppercase letter (A-Z), at least one lowercase letter (a-z), at
+// least one number (0-9
+void getUser(std::vector<std::string> cmd) {   
+    for (auto &val : cmd) std::cout << val << std::endl;
+    if (cmd[0] != "USER") return;
+    if (!(cmd.size() < 3)) return;
+    std::string user;
+    std::string password;
+
+    bool userExists = false;
+    if (cmd.size() == 2) {
+        // check if user exist
+    }
+    
+
+    if (!userExists) {
+        password = genRandom();
+        std::cout << password << std::endl;
+    }
+}   
+
 
 /*
 * Provides HELP output... kind of a dumb way of doing it, but it is easiest.
@@ -686,7 +770,7 @@ std::string buildHistoryStr(std::vector<Game>& clientGames, std::unordered_map<i
 /*
  * Builds recommendations based on user rating history
  * Whichever genre or platform the user has a tendency to rate
- * games higher than a 6 is returned to the user along with the 
+ * games higher than a 6 is returned to the usstd::string heloRes = "200 HELO " + std::string(s) + " (TCP)"; er along with the 
  * games the server has from that genre. 
  * If the user does not specify a filter, 
  * then the server returns a random recommendaton
@@ -950,6 +1034,7 @@ int main(int argc, char* argv[]) {
             std::string state = "standard"; // maybe change to enum
 
             // has the user completed the HELO 'handshake' ?
+            // change to loginInit
             bool heloInit = false;
 
             // games the client has successfully checked out
@@ -961,7 +1046,7 @@ int main(int argc, char* argv[]) {
             std::unordered_map<int, int> clientRatings = std::unordered_map<int, int>();
 
             while (true) {
-                if ((numbytes = recv(SSL_get_fd(SSL), buf.data(), MAXDATASIZE - 1, 0)) == -1) {
+                if ((numbytes = SSL_read(SSL, buf.data(), MAXDATASIZE - 1)) == -1) {
                     perror("recv");
                     exit(1);
                 } else if (numbytes == 0) {
@@ -973,7 +1058,7 @@ int main(int argc, char* argv[]) {
                 std::string receivedMsg(buf.data());
                 std::vector<std::string> clientCmdVec = splitStr(receivedMsg);
                 std::string cmd = clientCmdVec[0];
-
+                std::cout << cmd << std::endl;
                 // what even is a switch statement? *jokes*
                 if (heloInit && cmd == "BYE") {
                     // be sure to run a clean up function
@@ -986,11 +1071,12 @@ int main(int argc, char* argv[]) {
                     heloInit = false;
                     break;
                 }
-                else if (cmd == "HELO" && (clientCmdVec[1] == s || clientCmdVec[1] == hostname)) {
+                else if (cmd == "USER") {
+                    std::cout << "Made it here" << std::endl;
                     // need to return with client addr back to them
-                    std::string heloRes = "200 HELO " + std::string(s) + " (TCP)"; 
+                    getUser(clientCmdVec);
                     if (state != "standard") state = "standard"; // just reinit state if necessary
-                    if (sendAll(SSL, heloRes) == -1) {
+                    if (sendAll(SSL, "User initialized") == -1) {
                         perror("send");
                     } 
                     heloInit = true;
