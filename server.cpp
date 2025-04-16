@@ -40,7 +40,7 @@
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/evp.h>
-
+#include <cmath>
 /*
 * Project 3 notes:
 * Use OpenSSL 3.2.2's SSL_CTX functions to configure the TLS context:
@@ -284,13 +284,13 @@ void getUser(std::vector<std::string> cmd) {
         modCryptStore += "10000$"; // num iterations
 
     
-        std::vector<unsigned char> encodedSalt(4 * ((16 + 2) / 3));
-        EVP_EncodeBlock(encodedSalt.data(), salt, 16);
-        modCryptStore += std::string(reinterpret_cast<char*>(encodedSalt.data())) + "$";
+        std::vector<unsigned char> base64Salt(4 * ceil(16 / 3));
+        EVP_EncodeBlock(base64Salt.data(), salt, 16);
+        modCryptStore += std::string(reinterpret_cast<char*>(base64Salt.data())) + "$";
 
-        std::vector<unsigned char> encodedHash(4 * ((32 + 2) / 3));
-        EVP_EncodeBlock(encodedHash.data(), hash.data(), 32);
-        modCryptStore += std::string(reinterpret_cast<char*>(encodedHash.data()));
+        std::vector<unsigned char> base64Hash(4 * ceil(32 / 3));
+        EVP_EncodeBlock(base64Hash.data(), hash.data(), 32);
+        modCryptStore += std::string(reinterpret_cast<char*>(base64Hash.data()));
 
         std::cout << modCryptStore << std::endl;
 
