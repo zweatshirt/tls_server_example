@@ -294,7 +294,18 @@ void getUser(std::vector<std::string> cmd) {
 
         std::cout << modCryptStore << std::endl;
 
-        
+        EVP_ENCODE_CTX *context = EVP_ENCODE_CTX_new();
+        EVP_DecodeInit(context);
+        std::array<unsigned char, 16> decodedSalt;
+        EVP_DecodeBlock(base64Salt.data(), decodedSalt.data(), 16);
+        int decodeLength = 16;
+        EVP_DecodeUpdate(context, decodedSalt.data(), &decodeLength, base64Salt.data(), base64Salt.size());
+        EVP_DecodeFinal(context, decodedSalt.data(), &decodeLength);
+        EVP_ENCODE_CTX_free(context);
+        if (salt == decodedSalt.data()) { 
+            std::cout << "decoded salt matches" << std::endl;
+        } else std::cout << "decoded salt does not match" << std::endl;
+    
     }
 }   
 
