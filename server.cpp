@@ -38,6 +38,8 @@
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/rand.h>
+#include <openssl/evp.h>
 
 /*
 * Project 3 notes:
@@ -163,15 +165,24 @@ SSL* initSSLSocket(SSL_CTX* context, int socket) {
     exit(1);   
 }
 
-// taken from my project 2
+// taken from my project 2 and extended upon
 // convert password strength check to is own function
-std::string genRandom() {
+// implement CSPRNG
+std::tuple<const unsigned char*, std::string> genPass() {
     std::string chars;
     size_t stringLength;
 
     chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*_-+=."; 
     stringLength = 8;
-    
+
+    // use for CSPRNG
+    // std::uint_least32_t seed;    
+    // sysrandom(&seed, sizeof(seed));
+    // std::mt19937 gen(seed);
+    std::array<unsigned char, 16> salt;
+    RAND_bytes(salt.data(), salt.size());
+    const unsigned char* saltPtr = salt.data();
+
     std::string rand;
     if (!srandInit) {
         std::srand(std::time(0));
@@ -218,9 +229,28 @@ std::string genRandom() {
             rand = "";
             continue;
         } else {
-            return rand;
+            return { saltPtr, rand };
         }
     }
+}
+
+std::array<unsigned char, 32> genPassHash(std::tuple<const unsigned char*, std::string> saltAndPass) {
+    const int iters = 10000;
+    // const int keySize = 32;
+    std::array<unsigned char, 32> hash;
+
+    PKCS5_PBKDF2_HMAC(
+        std::get<1>(saltAndPass).c_str(),
+        std::get<1>(saltAndPass).length(),
+        std::get<0>(saltAndPass),
+        16, 
+        iters,
+        EVP_sha256(),
+        hash.size(),
+        hash.data()
+    );
+
+    return hash;
 }
 
 // The password must include at least one uppercase letter (A-Z), at least one lowercase letter (a-z), at
@@ -237,10 +267,34 @@ void getUser(std::vector<std::string> cmd) {
         // check if user exist
     }
     
-
+    std::tuple<const unsigned char*, std::string> saltAndPass;
     if (!userExists) {
-        password = genRandom();
-        std::cout << password << std::endl;
+        saltAndPass = genPass();
+        const unsigned char* salt;
+        salt = std::get<0>(saltAndPass);
+        password = std::get<1>(saltAndPass);
+        std::cout << "Able to get salt and pass" << std::endl;
+    
+        std::array<unsigned char, 32> hash = genPassHash(saltAndPass);
+        std::cout << "able to produce hash" << std::endl;
+
+        std::string modCryptStore;
+        modCryptStore += user + ":$"; // username
+        modCryptStore += "pkbdf2-sha256$"; // PRF used
+        modCryptStore += "10000$"; // num iterations
+
+    
+        std::vector<unsigned char> encodedSalt(4 * ((16 + 2) / 3));
+        EVP_EncodeBlock(encodedSalt.data(), salt, 16);
+        modCryptStore += std::string(reinterpret_cast<char*>(encodedSalt.data())) + "$";
+
+        std::vector<unsigned char> encodedHash(4 * ((32 + 2) / 3));
+        EVP_EncodeBlock(encodedHash.data(), hash.data(), 32);
+        modCryptStore += std::string(reinterpret_cast<char*>(encodedHash.data()));
+
+        std::cout << modCryptStore << std::endl;
+
+        
     }
 }   
 
