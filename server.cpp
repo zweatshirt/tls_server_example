@@ -168,7 +168,7 @@ SSL* initSSLSocket(SSL_CTX* context, int socket) {
 // taken from my project 2 and extended upon
 // convert password strength check to is own function
 // implement CSPRNG
-std::tuple<const unsigned char*, std::string> genPass() {
+std::tuple<std::array<unsigned char, 16>, std::string> genPass() {
     std::string chars;
     size_t stringLength;
 
@@ -179,9 +179,10 @@ std::tuple<const unsigned char*, std::string> genPass() {
     // std::uint_least32_t seed;    
     // sysrandom(&seed, sizeof(seed));
     // std::mt19937 gen(seed);
+    RAND_poll();
     std::array<unsigned char, 16> salt;
     RAND_bytes(salt.data(), salt.size());
-    const unsigned char* saltPtr = salt.data();
+
 
     std::string rand;
     if (!srandInit) {
@@ -229,12 +230,12 @@ std::tuple<const unsigned char*, std::string> genPass() {
             rand = "";
             continue;
         } else {
-            return { saltPtr, rand };
+            return { salt, rand };
         }
     }
 }
 
-std::array<unsigned char, 32> genPassHash(std::tuple<const unsigned char*, std::string> saltAndPass) {
+std::array<unsigned char, 32> genPassHash(std::tuple<std::array<unsigned char, 16>, std::string> saltAndPass) {
     const int iters = 10000;
     // const int keySize = 32;
     std::array<unsigned char, 32> hash;
@@ -242,14 +243,13 @@ std::array<unsigned char, 32> genPassHash(std::tuple<const unsigned char*, std::
     PKCS5_PBKDF2_HMAC(
         std::get<1>(saltAndPass).c_str(),
         std::get<1>(saltAndPass).length(),
-        std::get<0>(saltAndPass),
+        std::get<0>(saltAndPass).data(),
         16, 
         iters,
         EVP_sha256(),
         hash.size(),
         hash.data()
     );
-
     return hash;
 }
 
@@ -267,11 +267,11 @@ void getUser(std::vector<std::string> cmd) {
         // check if user exist
     }
     
-    std::tuple<const unsigned char*, std::string> saltAndPass;
+    std::tuple<std::array<unsigned char, 16>, std::string> saltAndPass;
     if (!userExists) {
         saltAndPass = genPass();
         const unsigned char* salt;
-        salt = std::get<0>(saltAndPass);
+        salt = std::get<0>(saltAndPass).data();
         password = std::get<1>(saltAndPass);
         std::cout << "Able to get salt and pass" << std::endl;
     
