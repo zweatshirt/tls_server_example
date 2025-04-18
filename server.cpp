@@ -41,15 +41,14 @@
 #include <openssl/rand.h>
 #include <openssl/evp.h>
 #include <cmath>
+#include "server.h"
 /*
-* Project 3 notes:
-* Use OpenSSL 3.2.2's SSL_CTX functions to configure the TLS context:
-* SSL_CTX_set_min_proto_version() and SSL_CTX_set_max_proto_version() to set the protocol version exclusively to TLS 1.3
-* SSL_CTX_set_ciphersuites()
-*
-*/
-
-
+ * Project 3 notes:
+ * Use OpenSSL 3.2.2's SSL_CTX functions to configure the TLS context:
+ * SSL_CTX_set_min_proto_version() and SSL_CTX_set_max_proto_version() to set the protocol version exclusively to TLS 1.3
+ * SSL_CTX_set_ciphersuites()
+ *
+ */
 
 /*
 * Concurrency ideas:
@@ -230,6 +229,7 @@ std::tuple<std::array<unsigned char, 16>, std::string> genPass() {
             rand = "";
             continue;
         } else {
+            std::cout << rand << std::endl;
             return { salt, rand };
         }
     }
@@ -255,11 +255,11 @@ std::array<unsigned char, 32> genPassHash(std::tuple<std::array<unsigned char, 1
 
 // The password must include at least one uppercase letter (A-Z), at least one lowercase letter (a-z), at
 // least one number (0-9
-void getUser(std::vector<std::string> cmd) {   
+std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {   
     for (auto &val : cmd) std::cout << val << std::endl;
-    if (cmd[0] != "USER") return;
-    if (!(cmd.size() < 3)) return;
-    std::string user;
+    if (cmd[0] != "USER") return  { false, "" };
+    if (!(cmd.size() == 2)) return {false, ""};
+    std::string user = cmd[1];
     std::string password;
 
     bool userExists = false;
@@ -273,6 +273,7 @@ void getUser(std::vector<std::string> cmd) {
         const unsigned char* salt;
         salt = std::get<0>(saltAndPass).data();
         password = std::get<1>(saltAndPass);
+        std::cout << "password: " << password << std::endl;
         std::cout << "Able to get salt and pass" << std::endl;
     
         std::array<unsigned char, 32> hash = genPassHash(saltAndPass);
@@ -294,35 +295,39 @@ void getUser(std::vector<std::string> cmd) {
 
         std::cout << modCryptStore << std::endl;
 
-
-        // used https://github.com/openssl/openssl/issues/17197 as a reference
-        EVP_ENCODE_CTX *context = EVP_ENCODE_CTX_new();
-        EVP_DecodeInit(context);
-        std::vector<unsigned char> decodedSalt(16); 
-        int decodeLength = 0;
-        int finalDecodeLength = 0;
-
-        EVP_DecodeUpdate(context, decodedSalt.data(), &decodeLength, base64Salt.data(), base64Salt.size());
-        // EVP_DecodeFinal(context, decodedSalt.data() + decodeLength, &finalDecodeLength); // may not be necessary
-
-        std::cout << "decode length: " << decodeLength << " finalDecodeLength: " << finalDecodeLength << std::endl;
-        // decodeLength += finalDecodeLength;
-        decodedSalt.resize(decodeLength);
-        EVP_ENCODE_CTX_free(context);
-
-        // std::cout << base64Salt.size() << std::endl;
-        // std::cout << decodedSalt.size() << std::endl;
-        if (std::equal(std::get<0>(saltAndPass).begin(), std::get<0>(saltAndPass).end(), decodedSalt.begin())) { 
-            std::cout << "decoded salt matches" << std::endl;
-        } else {
-            std::cout << "decoded salt does not match" << std::endl;
-        }
+        // EVPDecodeSalt(base64Salt, saltAndPass);
     }
+    return { userExists, password.data() };
+}
 
-    std::cout << "made it to end of function" << std::endl;
-}   
+void EVPDecodeSalt(std::vector<unsigned char> &base64Salt, std::tuple<std::array<unsigned char, 16UL>, std::string> &saltAndPass)
+{
+    // used https://github.com/openssl/openssl/issues/17197 as a reference
+    EVP_ENCODE_CTX *context = EVP_ENCODE_CTX_new();
+    EVP_DecodeInit(context);
+    std::vector<unsigned char> decodedSalt(16);
+    int decodeLength = 0;
+    int finalDecodeLength = 0;
 
+    EVP_DecodeUpdate(context, decodedSalt.data(), &decodeLength, base64Salt.data(), base64Salt.size());
+    // EVP_DecodeFinal(context, decodedSalt.data() + decodeLength, &finalDecodeLength); // may not be necessary
 
+    std::cout << "decode length: " << decodeLength << " finalDecodeLength: " << finalDecodeLength << std::endl;
+    // decodeLength += finalDecodeLength;
+    decodedSalt.resize(decodeLength);
+    EVP_ENCODE_CTX_free(context);
+
+    // std::cout << base64Salt.size() << std::endl; // size: consistently 24
+    // std::cout << decodedSalt.size() << std::endl; // size: consistently 16
+    if (std::equal(std::get<0>(saltAndPass).begin(), std::get<0>(saltAndPass).end(), decodedSalt.begin()))
+    {
+        std::cout << "decoded salt matches" << std::endl;
+    }
+    else
+    {
+        std::cout << "decoded salt does not match" << std::endl;
+    }
+}
 /*
 * Provides HELP output... kind of a dumb way of doing it, but it is easiest.
 */
@@ -1152,11 +1157,22 @@ int main(int argc, char* argv[]) {
                 else if (cmd == "USER") {
                     std::cout << "Made it here" << std::endl;
                     // need to return with client addr back to them
-                    getUser(clientCmdVec);
+
+                    std::string password;
+                    bool userExists;
+
+                    std::tuple<bool, std::string> getUserReturn = getUser(clientCmdVec);
+                    userExists = std::get<0>(getUserReturn);
+                    password = std::get<1>(getUserReturn);
+
                     if (state != "standard") state = "standard"; // just reinit state if necessary
-                    if (sendAll(SSL, "User initialized") == -1) {
-                        perror("send");
-                    } 
+
+                    // user's first time, did not exist in the file
+                    if (!userExists && !password.empty()) {
+                        if (sendAll(SSL, "Your new password is: " + password) == -1) {
+                            perror("send");
+                        } 
+                    }
                     heloInit = true;
                 } 
                 // should only be available if HELO initialized
