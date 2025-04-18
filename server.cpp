@@ -185,19 +185,26 @@ std::string findUserFromFile(std::string userName) {
     const std::string path = dir + "/.games_shadow";
     std::vector<std::string> users = readPassFile(path);
 
-    if (users.empty()) return "";
+    if (users.empty()) return "User not found";
 
     std::string foundUser = "";
+    bool userFound = false; // bad naming
     for (auto& user : users) {
-        if (user.substr(user.find_first_of("$")) == userName) {
+        std::cout << user << "\n" << std::endl;
+        size_t i = user.find_first_of(":$");
+        if (i != std::string::npos && user.substr(0, i) == userName) {
             std::string foundUser = user;
+            userFound = true;
+            // std::cout << "User was found" << std::endl;
             break;
         }
     }
 
-    if (foundUser.empty()) return "User not found";
+    std::cout << foundUser << std::endl;
+    if (!userFound) return "User not found";
     return foundUser;
 }
+
 
 void createPassFile() {
     const std::string dir = ".";
@@ -211,6 +218,7 @@ void createPassFile() {
     }
 }
 
+
 void writeToPassFile(std::string entry) {
     std::cout << "writing user to file" << std::endl;
     const std::string dir = ".";
@@ -222,7 +230,6 @@ void writeToPassFile(std::string entry) {
         out.close();
     }
 }
-
 
 
 // taken from my project 2 and extended upon
@@ -324,10 +331,12 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
     std::string password;
 
     bool userExists = false;
-    if (cmd.size() == 2) {
-        // check if user exist
-    }
-    
+
+    std::string userFromFile = findUserFromFile(user);
+    if (userFromFile != "User not found") userExists = true;
+    std::cout << userExists << std::endl;
+    std::cout << userFromFile << std::endl;
+
     std::tuple<std::array<unsigned char, 16>, std::string> saltAndPass;
     if (!userExists) {
         saltAndPass = genPass();
@@ -360,6 +369,7 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
         std::cout << "in getUser, writing to file" << std::endl;
         writeToPassFile(modCryptStore);
     }
+    
     return { userExists, password.data() };
 }
 
@@ -395,6 +405,8 @@ void EVPDecodeSalt(std::vector<unsigned char> &base64Salt, std::tuple<std::array
         std::cout << "decoded salt does not match" << std::endl;
     }
 }
+
+
 /*
 * Provides HELP output... kind of a dumb way of doing it, but it is easiest.
 */
@@ -1237,6 +1249,12 @@ int main(int argc, char* argv[]) {
                     // user's first time, did not exist in the file
                     if (!userExists && !password.empty()) {
                         if (sendAll(SSL, "Your new password is: " + password) == -1) {
+                            perror("send");
+                        } 
+                    }
+
+                    if (userExists) {
+                        if (sendAll(SSL, "300 Password required " + password) == -1) {
                             perror("send");
                         } 
                     }
