@@ -283,30 +283,43 @@ void getUser(std::vector<std::string> cmd) {
         modCryptStore += "pkbdf2-sha256$"; // PRF used
         modCryptStore += "10000$"; // num iterations
 
-    
-        std::vector<unsigned char> base64Salt(4 * ceil(16 / 3));
+        std::cout << std::get<0>(saltAndPass).size() << std::endl;
+        std::vector<unsigned char> base64Salt(int(4 * ceil(16.0 / 3.0)));
         EVP_EncodeBlock(base64Salt.data(), salt, 16);
         modCryptStore += std::string(reinterpret_cast<char*>(base64Salt.data())) + "$";
 
-        std::vector<unsigned char> base64Hash(4 * ceil(32 / 3));
+        std::vector<unsigned char> base64Hash(int(4 * ceil(32 / 3)));
         EVP_EncodeBlock(base64Hash.data(), hash.data(), 32);
         modCryptStore += std::string(reinterpret_cast<char*>(base64Hash.data()));
 
         std::cout << modCryptStore << std::endl;
 
+
+        // used https://github.com/openssl/openssl/issues/17197 as a reference
         EVP_ENCODE_CTX *context = EVP_ENCODE_CTX_new();
         EVP_DecodeInit(context);
-        std::array<unsigned char, 16> decodedSalt;
-        EVP_DecodeBlock(base64Salt.data(), decodedSalt.data(), 16);
-        int decodeLength = 16;
+        std::vector<unsigned char> decodedSalt(16); 
+        int decodeLength = 0;
+        int finalDecodeLength = 0;
+
         EVP_DecodeUpdate(context, decodedSalt.data(), &decodeLength, base64Salt.data(), base64Salt.size());
-        EVP_DecodeFinal(context, decodedSalt.data(), &decodeLength);
+        // EVP_DecodeFinal(context, decodedSalt.data() + decodeLength, &finalDecodeLength); // may not be necessary
+
+        std::cout << "decode length: " << decodeLength << " finalDecodeLength: " << finalDecodeLength << std::endl;
+        // decodeLength += finalDecodeLength;
+        decodedSalt.resize(decodeLength);
         EVP_ENCODE_CTX_free(context);
-        if (salt == decodedSalt.data()) { 
+
+        // std::cout << base64Salt.size() << std::endl;
+        // std::cout << decodedSalt.size() << std::endl;
+        if (std::equal(std::get<0>(saltAndPass).begin(), std::get<0>(saltAndPass).end(), decodedSalt.begin())) { 
             std::cout << "decoded salt matches" << std::endl;
-        } else std::cout << "decoded salt does not match" << std::endl;
-    
+        } else {
+            std::cout << "decoded salt does not match" << std::endl;
+        }
     }
+
+    std::cout << "made it to end of function" << std::endl;
 }   
 
 
