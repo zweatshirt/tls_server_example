@@ -164,6 +164,67 @@ SSL* initSSLSocket(SSL_CTX* context, int socket) {
     exit(1);   
 }
 
+
+// references https://www.geeksforgeeks.org/how-to-read-from-a-file-in-cpp/
+std::vector<std::string> readPassFile(const std::filesystem::path &path) {
+    std::ifstream file(path);
+
+    std::vector<std::string> text;
+    std::string line;
+
+    while (std::getline(file, line)) {
+        text.push_back(line);
+    }
+    file.close();
+    return text;
+}
+
+
+std::string findUserFromFile(std::string userName) {
+    const std::string dir = ".";
+    const std::string path = dir + "/.games_shadow";
+    std::vector<std::string> users = readPassFile(path);
+
+    if (users.empty()) return "";
+
+    std::string foundUser = "";
+    for (auto& user : users) {
+        if (user.substr(user.find_first_of("$")) == userName) {
+            std::string foundUser = user;
+            break;
+        }
+    }
+
+    if (foundUser.empty()) return "User not found";
+    return foundUser;
+}
+
+void createPassFile() {
+    const std::string dir = ".";
+    const std::string path = dir + "/.games_shadow";
+    if (std::filesystem::exists(path)) std::filesystem::remove(path);
+
+    std::filesystem::create_directories(dir);
+    std::ofstream out(path, std::ios::out); 
+    if (out.is_open()) {
+        out.close();
+    }
+}
+
+void writeToPassFile(std::string entry) {
+    std::cout << "writing user to file" << std::endl;
+    const std::string dir = ".";
+    const std::string path = dir + "/.games_shadow";
+
+    std::ofstream out(path, std::ios::app); 
+    if (out.is_open()) {
+        out << entry + "\n"; // don't forget to parse out newline
+        out.close();
+    }
+}
+
+
+
 // taken from my project 2 and extended upon
 // convert password strength check to is own function
 // implement CSPRNG
@@ -296,13 +357,19 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
         std::cout << modCryptStore << std::endl;
 
         // EVPDecodeSalt(base64Salt, saltAndPass);
+        std::cout << "in getUser, writing to file" << std::endl;
+        writeToPassFile(modCryptStore);
     }
     return { userExists, password.data() };
 }
 
+
+/*
+* used https://github.com/openssl/openssl/issues/17197 as a loose reference
+* (mostly what it looks like to use EVP_DecodeUpdate and EVP_DecodeFinal)
+*/
 void EVPDecodeSalt(std::vector<unsigned char> &base64Salt, std::tuple<std::array<unsigned char, 16UL>, std::string> &saltAndPass)
 {
-    // used https://github.com/openssl/openssl/issues/17197 as a reference
     EVP_ENCODE_CTX *context = EVP_ENCODE_CTX_new();
     EVP_DecodeInit(context);
     std::vector<unsigned char> decodedSalt(16);
@@ -981,6 +1048,7 @@ std::string rateGame(std::vector<Game> clientGames, std::vector<std::string> cmd
 
 
 int main(int argc, char* argv[]) {
+    createPassFile(); // initialize the user-password bank
     int sockfd, new_fd;
     struct addrinfo hints, *servinfo, *p;
     struct sockaddr_storage their_addr;
@@ -999,7 +1067,6 @@ int main(int argc, char* argv[]) {
     SSL_CTX* context = initSSLContext();
     initCipherSuites(context);
     validateCertAndKey(context);
-
 
     // database
     const std::string DB_NAME = "games.db";
