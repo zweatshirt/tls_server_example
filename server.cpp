@@ -47,8 +47,12 @@
  * Use OpenSSL 3.2.2's SSL_CTX functions to configure the TLS context:
  * SSL_CTX_set_min_proto_version() and SSL_CTX_set_max_proto_version() to set the protocol version exclusively to TLS 1.3
  * SSL_CTX_set_ciphersuites()
+ * 
+ * 
  *
  */
+
+// ! FIX core dump issue when closing connection to client on sending password
 
 /*
 * Concurrency ideas:
@@ -263,7 +267,9 @@ std::tuple<std::array<unsigned char, 16>, std::string> genPass() {
     bool containsNum = false;
     while (true) {
         for (size_t i = 0; i < stringLength; i++) {
-            rand += chars[std::rand() % chars.size()];
+            unsigned char randIdx;
+            RAND_bytes(&randIdx, 1);
+            rand += chars[randIdx % chars.size()];
         }
         if (std::any_of(rand.begin(), rand.begin() + 1, [](char c) {
             return std::string("!@#$%&*_-+=.").find(c) != std::string::npos;
@@ -363,12 +369,12 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
         EVP_EncodeBlock(base64Hash.data(), hash.data(), 32);
         modCryptStore += std::string(reinterpret_cast<char*>(base64Hash.data()));
 
-        std::cout << modCryptStore << std::endl;
+        // std::cout << modCryptStore << std::endl;
 
         // EVPDecodeSalt(base64Salt, saltAndPass);
-        std::cout << "in getUser, writing to file" << std::endl;
+        // std::cout << "in getUser, writing to file" << std::endl;
         writeToPassFile(modCryptStore);
-    }
+    } 
     
     return { userExists, password.data() };
 }
@@ -1237,6 +1243,12 @@ int main(int argc, char* argv[]) {
                     std::cout << "Made it here" << std::endl;
                     // need to return with client addr back to them
 
+                    if (clientCmdVec.size() < 2 || clientCmdVec.size() > 2) {
+                        if (sendAll(SSL, "400 Incorrect number of arguments") == -1) {
+                            perror("send");
+                        }
+                        continue;
+                    }
                     std::string password;
                     bool userExists;
 
@@ -1250,15 +1262,18 @@ int main(int argc, char* argv[]) {
                     if (!userExists && !password.empty()) {
                         if (sendAll(SSL, "Your new password is: " + password) == -1) {
                             perror("send");
-                        } 
+                        }
+                        // ! break; fix this, it causes program to crash
                     }
 
                     if (userExists) {
-                        if (sendAll(SSL, "300 Password required " + password) == -1) {
+                        if (sendAll(SSL, "300 Password required") == -1) {
                             perror("send");
-                        } 
+                        }
+                        // wait for PASS command then do authentication protocol
+                        // heloInit = true;
                     }
-                    heloInit = true;
+                    
                 } 
                 // should only be available if HELO initialized
                 else if (heloInit && cmd == "HELP" && clientCmdVec.size() == 1) {
@@ -1425,12 +1440,14 @@ int main(int argc, char* argv[]) {
                 }
             }
 
+            SSL_shutdown(SSL);
+            SSL_free(SSL);
             close(new_fd);
         });
-
         clientThread.detach();
     }
 
     SSL_CTX_free(context);
+    context = nullptr;
     return 0;
 }
