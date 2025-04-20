@@ -189,6 +189,11 @@ std::string findUserFromFile(std::string userName) {
     const std::string path = dir + "/.games_shadow";
     std::vector<std::string> users = readPassFile(path);
 
+    // std::cout << "Users in file: " << std::endl;
+    // for (auto &user: users) {
+    //     std::cout << user << std::endl;
+    // }
+
     if (users.empty()) return "User not found";
 
     std::string foundUser = "";
@@ -197,15 +202,19 @@ std::string findUserFromFile(std::string userName) {
         std::cout << user << "\n" << std::endl;
         size_t i = user.find_first_of(":$");
         if (i != std::string::npos && user.substr(0, i) == userName) {
-            std::string foundUser = user;
+            // std::cout << "User name entered in function: " << userName << std::endl;
+            foundUser = user;
             userFound = true;
             // std::cout << "User was found" << std::endl;
             break;
         }
     }
 
-    std::cout << foundUser << std::endl;
     if (!userFound) return "User not found";
+    if (foundUser.empty()) {
+        std::cout << "user empty" << std::endl;
+        return "User not found";
+    }
     return foundUser;
 }
 
@@ -255,11 +264,13 @@ std::tuple<std::array<unsigned char, 16>, std::string> genPass() {
     RAND_bytes(salt.data(), salt.size());
 
 
+    // deprecating, does not conform to CSPRNG expectation
+    // std::string rand;
+    // if (!srandInit) {
+    //     std::srand(std::time(0));
+    //     srandInit = true;
+    // }
     std::string rand;
-    if (!srandInit) {
-        std::srand(std::time(0));
-        srandInit = true;
-    }
 
     bool containsUpper = false;
     bool containsLower = false;
@@ -340,8 +351,8 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
 
     std::string userFromFile = findUserFromFile(user);
     if (userFromFile != "User not found") userExists = true;
-    std::cout << userExists << std::endl;
-    std::cout << userFromFile << std::endl;
+    // std::cout << userExists << std::endl;
+    // std::cout << userFromFile << std::endl;
 
     std::tuple<std::array<unsigned char, 16>, std::string> saltAndPass;
     if (!userExists) {
@@ -349,18 +360,18 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
         const unsigned char* salt;
         salt = std::get<0>(saltAndPass).data();
         password = std::get<1>(saltAndPass);
-        std::cout << "password: " << password << std::endl;
-        std::cout << "Able to get salt and pass" << std::endl;
+        // std::cout << "password: " << password << std::endl;
+        // std::cout << "Able to get salt and pass" << std::endl;
     
         std::array<unsigned char, 32> hash = genPassHash(saltAndPass);
-        std::cout << "able to produce hash" << std::endl;
+        // std::cout << "able to produce hash" << std::endl;
 
         std::string modCryptStore;
         modCryptStore += user + ":$"; // username
         modCryptStore += "pkbdf2-sha256$"; // PRF used
         modCryptStore += "10000$"; // num iterations
 
-        std::cout << std::get<0>(saltAndPass).size() << std::endl;
+        // std::cout << std::get<0>(saltAndPass).size() << std::endl;
         std::vector<unsigned char> base64Salt(int(4 * ceil(16.0 / 3.0)));
         EVP_EncodeBlock(base64Salt.data(), salt, 16);
         modCryptStore += std::string(reinterpret_cast<char*>(base64Salt.data())) + "$";
@@ -379,6 +390,29 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
     return { userExists, password.data() };
 }
 
+std::string validateUser(std::string currentUser, std::string pass) {
+    std::cout << "Is user empty? " << currentUser.empty() << std::endl;
+    std::string userInfo = findUserFromFile(currentUser);
+
+    std::cout << "User found: " << userInfo << std::endl;
+    // size_t delimAfterUser = userInfo.find(":$");
+    // size_t delimAfterPrf = userInfo.find("$", delimAfterUser + 2);
+    // size_t delimAfterNumIter = userInfo.find("$", delimAfterPrf + 1);
+    // size_t delimAfterSalt = userInfo.find("$", delimAfterNumIter + 1);
+    // size_t delimAfterHash = userInfo.find("$", delimAfterSalt + 1);
+
+    // std::string prf = userInfo.substr(delimAfterUser, delimAfterPrf - delimAfterUser - 1);
+    // std::string numIter = userInfo.substr(delimAfterPrf, delimAfterNumIter - delimAfterPrf - 1);
+    // std::string salt = userInfo.substr(delimAfterNumIter, delimAfterSalt - delimAfterNumIter - 1);
+    // std::string hash = userInfo.substr(delimAfterSalt, delimAfterHash - delimAfterSalt - 1);
+    // std::cout << prf << std::endl;
+    // std::cout << numIter << std::endl;
+    // std::cout << salt << std::endl;
+    // std::cout << hash << std::endl;
+
+    return "Yes";
+}
+
 
 /*
 * used https://github.com/openssl/openssl/issues/17197 as a loose reference
@@ -390,12 +424,12 @@ void EVPDecodeSalt(std::vector<unsigned char> &base64Salt, std::tuple<std::array
     EVP_DecodeInit(context);
     std::vector<unsigned char> decodedSalt(16);
     int decodeLength = 0;
-    int finalDecodeLength = 0;
+    // int finalDecodeLength = 0;
 
     EVP_DecodeUpdate(context, decodedSalt.data(), &decodeLength, base64Salt.data(), base64Salt.size());
     // EVP_DecodeFinal(context, decodedSalt.data() + decodeLength, &finalDecodeLength); // may not be necessary
 
-    std::cout << "decode length: " << decodeLength << " finalDecodeLength: " << finalDecodeLength << std::endl;
+    // std::cout << "decode length: " << decodeLength << " finalDecodeLength: " << finalDecodeLength << std::endl;
     // decodeLength += finalDecodeLength;
     decodedSalt.resize(decodeLength);
     EVP_ENCODE_CTX_free(context);
@@ -1204,6 +1238,8 @@ int main(int argc, char* argv[]) {
             // has the user completed the HELO 'handshake' ?
             // change to loginInit
             bool heloInit = false;
+            bool waitingForPass = false;
+            std::string currentUser = "";
 
             // games the client has successfully checked out
             std::vector<Game> clientGames = std::vector<Game>();
@@ -1226,8 +1262,16 @@ int main(int argc, char* argv[]) {
                 std::string receivedMsg(buf.data());
                 std::vector<std::string> clientCmdVec = splitStr(receivedMsg);
                 std::string cmd = clientCmdVec[0];
-                std::cout << cmd << std::endl;
+                // std::cout << cmd << std::endl;
                 // what even is a switch statement? *jokes*
+
+                if (waitingForPass) {
+                    if (cmd == "PASS" && clientCmdVec.size() == 2) {
+                        std::cout << currentUser << std::endl;
+                        validateUser(currentUser, clientCmdVec[1]);
+                    }
+                    else break;
+                }
                 if (heloInit && cmd == "BYE") {
                     // be sure to run a clean up function
                     std::string byeRes = BYE;
@@ -1240,7 +1284,6 @@ int main(int argc, char* argv[]) {
                     break;
                 }
                 else if (cmd == "USER") {
-                    std::cout << "Made it here" << std::endl;
                     // need to return with client addr back to them
 
                     if (clientCmdVec.size() < 2 || clientCmdVec.size() > 2) {
@@ -1263,13 +1306,16 @@ int main(int argc, char* argv[]) {
                         if (sendAll(SSL, "Your new password is: " + password) == -1) {
                             perror("send");
                         }
-                        // ! break; fix this, it causes program to crash
-                    }
-
-                    if (userExists) {
+                        // waitingForPass = false; // Reset state to allow further commands
+                        continue; // Continue processing the next command
+                    } else if (userExists) {
                         if (sendAll(SSL, "300 Password required") == -1) {
                             perror("send");
                         }
+                        waitingForPass = true;
+                        // std::cout << "the current user is " << clientCmdVec[1] << std::endl;
+                        // std::cout << clientCmdVec[1].size() << std::endl;
+                        currentUser = clientCmdVec[1];
                         // wait for PASS command then do authentication protocol
                         // heloInit = true;
                     }
