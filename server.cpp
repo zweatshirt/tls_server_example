@@ -115,9 +115,12 @@
 * multi-threading techniques or the fork() system call.
 */
 
+
 // !Implement Mutex locking
 // I am pretty sure this works, but I honestly don't fully understand Mutex
 std::mutex mtx;
+std::array<unsigned char, 16> globalTestSalt; // this is for testing...
+std::array<unsigned char, 32> globalTestHash; // this is for testing...
 
 bool srandInit = false;
 
@@ -359,11 +362,14 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
         saltAndPass = genPass();
         const unsigned char* salt;
         salt = std::get<0>(saltAndPass).data();
+        std::copy(salt, salt + globalTestSalt.size(), globalTestSalt.begin());
+        std::cout << "SALT BEFORE ENCODING PROCESS " << salt << std::endl;
         password = std::get<1>(saltAndPass);
         // std::cout << "password: " << password << std::endl;
         // std::cout << "Able to get salt and pass" << std::endl;
     
         std::array<unsigned char, 32> hash = genPassHash(saltAndPass);
+        std::copy(std::begin(hash), std::end(hash), globalTestHash.begin());
         // std::cout << "able to produce hash" << std::endl;
 
         std::string modCryptStore;
@@ -390,36 +396,11 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
     return { userExists, password.data() };
 }
 
-std::string validateUser(std::string currentUser, std::string pass) {
-    std::cout << "Is user empty? " << currentUser.empty() << std::endl;
-    std::string userInfo = findUserFromFile(currentUser);
-
-    std::cout << "User found: " << userInfo << std::endl;
-    // size_t delimAfterUser = userInfo.find(":$");
-    // size_t delimAfterPrf = userInfo.find("$", delimAfterUser + 2);
-    // size_t delimAfterNumIter = userInfo.find("$", delimAfterPrf + 1);
-    // size_t delimAfterSalt = userInfo.find("$", delimAfterNumIter + 1);
-    // size_t delimAfterHash = userInfo.find("$", delimAfterSalt + 1);
-
-    // std::string prf = userInfo.substr(delimAfterUser, delimAfterPrf - delimAfterUser - 1);
-    // std::string numIter = userInfo.substr(delimAfterPrf, delimAfterNumIter - delimAfterPrf - 1);
-    // std::string salt = userInfo.substr(delimAfterNumIter, delimAfterSalt - delimAfterNumIter - 1);
-    // std::string hash = userInfo.substr(delimAfterSalt, delimAfterHash - delimAfterSalt - 1);
-    // std::cout << prf << std::endl;
-    // std::cout << numIter << std::endl;
-    // std::cout << salt << std::endl;
-    // std::cout << hash << std::endl;
-
-    return "Yes";
-}
-
-
 /*
 * used https://github.com/openssl/openssl/issues/17197 as a loose reference
 * (mostly what it looks like to use EVP_DecodeUpdate and EVP_DecodeFinal)
 */
-void EVPDecodeSalt(std::vector<unsigned char> &base64Salt, std::tuple<std::array<unsigned char, 16UL>, std::string> &saltAndPass)
-{
+std::array<unsigned char, 16> EVPDecodeSalt(std::vector<unsigned char> &base64Salt) {
     EVP_ENCODE_CTX *context = EVP_ENCODE_CTX_new();
     EVP_DecodeInit(context);
     std::vector<unsigned char> decodedSalt(16);
@@ -434,17 +415,86 @@ void EVPDecodeSalt(std::vector<unsigned char> &base64Salt, std::tuple<std::array
     decodedSalt.resize(decodeLength);
     EVP_ENCODE_CTX_free(context);
 
+    // mostly due to my own laziness
+    std::array<unsigned char, 16> saltArr;
+    std::copy(decodedSalt.begin(), decodedSalt.end(), saltArr.begin());
+    return saltArr;
     // std::cout << base64Salt.size() << std::endl; // size: consistently 24
     // std::cout << decodedSalt.size() << std::endl; // size: consistently 16
-    if (std::equal(std::get<0>(saltAndPass).begin(), std::get<0>(saltAndPass).end(), decodedSalt.begin()))
-    {
-        std::cout << "decoded salt matches" << std::endl;
-    }
-    else
-    {
-        std::cout << "decoded salt does not match" << std::endl;
-    }
+    // if (std::equal(std::get<0>(saltAndPass).begin(), std::get<0>(saltAndPass).end(), decodedSalt.begin()))
+    // {
+    //     std::cout << "decoded salt matches" << std::endl;
+    // }
+    // else
+    // {
+    //     std::cout << "decoded salt does not match" << std::endl;
+    // }
 }
+
+std::array<unsigned char, 32> EVPDecodeHash(std::vector<unsigned char> &base64Hash) {
+    EVP_ENCODE_CTX *context = EVP_ENCODE_CTX_new();
+    EVP_DecodeInit(context);
+    std::vector<unsigned char> decodedHash(32);
+    int decodeLength = 0;
+    // int finalDecodeLength = 0;
+
+    EVP_DecodeUpdate(context, decodedHash.data(), &decodeLength, base64Hash.data(), base64Hash.size());
+    // EVP_DecodeFinal(context, decodedSalt.data() + decodeLength, &finalDecodeLength); // may not be necessary
+
+    // std::cout << "decode length: " << decodeLength << " finalDecodeLength: " << finalDecodeLength << std::endl;
+    // decodeLength += finalDecodeLength;
+    decodedHash.resize(decodeLength);
+    EVP_ENCODE_CTX_free(context);
+
+    // mostly due to my own laziness
+    std::array<unsigned char, 32> hashArr;
+    std::copy(decodedHash.begin(), decodedHash.end(), hashArr.begin());
+    return hashArr;
+  
+}
+
+std::string validateUser(std::string currentUser, std::string pass) {
+    std::cout << "Is user empty? " << currentUser.empty() << std::endl;
+    std::string userInfo = findUserFromFile(currentUser);
+
+    std::cout << "User found: " << userInfo << std::endl;
+    size_t delimAfterUser = userInfo.find(":$");
+    size_t delimAfterPrf = userInfo.find("$", delimAfterUser + 2);
+    size_t delimAfterNumIter = userInfo.find("$", delimAfterPrf + 1);
+    size_t delimAfterSalt = userInfo.find("$", delimAfterNumIter + 1);
+    size_t delimAfterHash = userInfo.find("$", delimAfterSalt + 1);
+
+    std::string prf = userInfo.substr(delimAfterUser + 2, delimAfterPrf - delimAfterUser - 2);
+    std::string numIter = userInfo.substr(delimAfterPrf + 1, delimAfterNumIter - delimAfterPrf - 2);
+    std::string salt = userInfo.substr(delimAfterNumIter + 1, delimAfterSalt - delimAfterNumIter - 1);
+    std::string hash = userInfo.substr(delimAfterSalt + 1);
+    std::cout << "HASH " << hash << std::endl;
+    // std::cout << prf << std::endl;
+    // std::cout << numIter << std::endl;
+    // std::cout << salt << std::endl;
+
+    std::cout << "SALT BEFORE DECODE " << salt << std::endl;
+    std::vector<unsigned char> base64Salt(salt.begin(), salt.end());
+    std::array<unsigned char, 16> decodedSalt = EVPDecodeSalt(base64Salt);
+
+    std::vector<unsigned char> base64Hash(hash.begin(), hash.end());
+    std::array<unsigned char, 32> decodedHash = EVPDecodeHash(base64Hash);
+   
+    // good stuff
+    // if (decodedSalt == globalTestSalt) {
+    //     std::cout << "SALT CORRECTLY DECODED" << std::endl;
+    // }
+    if (decodedHash == globalTestHash) {
+        std::cout << "HASH CORRECTLY DECODED" << std::endl;
+    }
+
+
+   
+
+    return "Yes";
+}
+
+
 
 
 /*
