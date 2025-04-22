@@ -330,14 +330,15 @@ std::array<unsigned char, 32> genPassHash(std::tuple<std::array<unsigned char, 1
 
     PKCS5_PBKDF2_HMAC(
         std::get<1>(saltAndPass).c_str(),
-        std::get<1>(saltAndPass).length(),
+        static_cast<int>(std::get<1>(saltAndPass).length()),
         std::get<0>(saltAndPass).data(),
-        16, 
+        static_cast<int>(std::get<0>(saltAndPass).size()),
         iters,
         EVP_sha256(),
-        hash.size(),
+        static_cast<int>(hash.size()),
         hash.data()
     );
+    
     return hash;
 }
 
@@ -363,13 +364,18 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
         const unsigned char* salt;
         salt = std::get<0>(saltAndPass).data();
         std::copy(salt, salt + globalTestSalt.size(), globalTestSalt.begin());
-        std::cout << "SALT BEFORE ENCODING PROCESS " << salt << std::endl;
+        
         password = std::get<1>(saltAndPass);
         // std::cout << "password: " << password << std::endl;
         // std::cout << "Able to get salt and pass" << std::endl;
     
         std::array<unsigned char, 32> hash = genPassHash(saltAndPass);
         std::copy(std::begin(hash), std::end(hash), globalTestHash.begin());
+        std::cout << "HASH BEFORE ENCODING PROCESS ";
+        for (const auto& byte : hash) {
+            std::cout << std::hex << static_cast<int>(byte);
+        }
+        std::cout << std::endl;
         // std::cout << "able to produce hash" << std::endl;
 
         std::string modCryptStore;
@@ -454,10 +460,10 @@ std::array<unsigned char, 32> EVPDecodeHash(std::vector<unsigned char> &base64Ha
 }
 
 std::string validateUser(std::string currentUser, std::string pass) {
-    std::cout << "Is user empty? " << currentUser.empty() << std::endl;
+    // std::cout << "Is user empty? " << currentUser.empty() << std::endl;
     std::string userInfo = findUserFromFile(currentUser);
 
-    std::cout << "User found: " << userInfo << std::endl;
+    // std::cout << "User found: " << userInfo << std::endl;
     size_t delimAfterUser = userInfo.find(":$");
     size_t delimAfterPrf = userInfo.find("$", delimAfterUser + 2);
     size_t delimAfterNumIter = userInfo.find("$", delimAfterPrf + 1);
@@ -465,33 +471,76 @@ std::string validateUser(std::string currentUser, std::string pass) {
     size_t delimAfterHash = userInfo.find("$", delimAfterSalt + 1);
 
     std::string prf = userInfo.substr(delimAfterUser + 2, delimAfterPrf - delimAfterUser - 2);
-    std::string numIter = userInfo.substr(delimAfterPrf + 1, delimAfterNumIter - delimAfterPrf - 2);
+    std::string numIter = userInfo.substr(delimAfterPrf + 1, delimAfterNumIter - delimAfterPrf - 1);
     std::string salt = userInfo.substr(delimAfterNumIter + 1, delimAfterSalt - delimAfterNumIter - 1);
-    std::string hash = userInfo.substr(delimAfterSalt + 1);
-    std::cout << "HASH " << hash << std::endl;
-    // std::cout << prf << std::endl;
-    // std::cout << numIter << std::endl;
-    // std::cout << salt << std::endl;
+    std::string hash = userInfo.substr(delimAfterSalt + 1, userInfo.size() - 2);
+
+    std::cout << "PRF: " << prf << std::endl;
+    std::cout << "NUM ITER: " << numIter << std::endl;
+    std::cout << salt << std::endl;
 
     std::cout << "SALT BEFORE DECODE " << salt << std::endl;
     std::vector<unsigned char> base64Salt(salt.begin(), salt.end());
     std::array<unsigned char, 16> decodedSalt = EVPDecodeSalt(base64Salt);
 
+    std::cout << "HASH BEFORE DECODE " << hash << std::endl;
     std::vector<unsigned char> base64Hash(hash.begin(), hash.end());
     std::array<unsigned char, 32> decodedHash = EVPDecodeHash(base64Hash);
-   
-    // good stuff
-    // if (decodedSalt == globalTestSalt) {
-    //     std::cout << "SALT CORRECTLY DECODED" << std::endl;
-    // }
-    if (decodedHash == globalTestHash) {
-        std::cout << "HASH CORRECTLY DECODED" << std::endl;
+
+    if (!hash.empty() && hash.back() == '\n') {
+        hash.pop_back();
+        std::cout << "HASH had a newline at the end and it was removed." << std::endl;
     }
 
+    std::cout << "HASH AFTER DECODING PROCESS ";
+    for (const auto& byte : decodedHash) {
+        std::cout << std::hex << static_cast<int>(byte);
+    }
+
+    std::array<unsigned char, 32> generatedHash;
+    if (!pass.empty() && pass.back() == '\n') {
+        pass.pop_back();
+        std::cout << "PASS had a newline at the end and it was removed." << std::endl;
+    }
+    std::cout << "PASS ENTERED " << pass << std::endl;
+
+    PKCS5_PBKDF2_HMAC(
+        pass.c_str(),
+        static_cast<int>(pass.length()),
+        decodedSalt.data(),
+        static_cast<int>(decodedSalt.size()),
+        std::stoi(numIter),
+        EVP_sha256(),
+        static_cast<int>(generatedHash.size()),
+        generatedHash.data()
+    );
+    std::cout << "GENERATED HASH ";
+    for (const auto& byte : generatedHash) {
+        std::cout << std::hex << static_cast<int>(byte);
+    }
+    std::cout << std::endl;
+
+
+    if (generatedHash == decodedHash) {
+        std::cout << "PASSWORD validated" << std::endl;
+        return "250 SUCCESS: Password validated.";
+    } else {
+        std::cout << "it doesn't match" << std::endl;
+        return "403 FORBIDDEN: Invalid password.";
+    }
+   
+    // // good stuff
+    // // if (decodedSalt == globalTestSalt) {
+    // //     std::cout << "SALT CORRECTLY DECODED" << std::endl;
+    // // }
+    // if (decodedHash == globalTestHash) {
+    //     std::cout << "HASH CORRECTLY DECODED" << std::endl;
+    // }
+
 
    
 
-    return "Yes";
+    // return "Yes";
 }
 
 
