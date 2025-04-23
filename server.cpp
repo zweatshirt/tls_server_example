@@ -1460,12 +1460,25 @@ int main(int argc, char* argv[]) {
                             
                             continue;
                         }
-                        else if (validateRes == "410 FAIL: Authentication failed")
-                        if (sendAll(SSLConnect, BAD_SEQ_CODE) == -1) {
-                                perror("send");
-                        }   
+                        else if (validateRes == "410 FAILED: Authentication failed") {
+                            if (passwordAttempts == 2) {
+                                if (sendAll(SSLConnect, validateRes + " on second attempt. Closing connection.")) {
+                                    perror("send");
+                                }
+                            }
+                            else {
+                                if (sendAll(SSLConnect, validateRes) == -1) {
+                                    perror("send");
+                                }
+                            }
+                        }
+                        else {
+                            if (sendAll(SSLConnect, BAD_SEQ_CODE) == -1) {
+                                    perror("send");
+                            }   
+                        }
                     }
-                    else sendAll(SSLConnect, "")
+                    else sendAll(SSLConnect, BAD_SEQ_CODE);
 
                 }
                 // allow user to run BYE anytime, even during authentication...
