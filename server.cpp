@@ -42,6 +42,8 @@
 #include <openssl/evp.h>
 #include <cmath>
 #include "server.h"
+#include <mutex>
+
 /*
  * Project 3 notes:
  * Use OpenSSL 3.2.2's SSL_CTX functions to configure the TLS context:
@@ -125,9 +127,9 @@ std::array<unsigned char, 32> globalTestHash; // this is for testing...
 bool srandInit = false;
 
 SSL_CTX* initSSLContext() {
-    SSL_library_init();
-    OpenSSL_add_ssl_algorithms();
-    SSL_load_error_strings();
+    // SSL_library_init();
+    // OpenSSL_add_ssl_algorithms();
+    // SSL_load_error_strings();
     const SSL_METHOD* method = TLS_method();
     SSL_CTX* context = SSL_CTX_new(method);
     if (!context) {
@@ -158,18 +160,29 @@ void validateCertAndKey(SSL_CTX* context) {
         SSL_CTX_free(context);
         exit(1);
     }
-    std::cout << "private key matches cert" << std::endl;
+    // std::cout << "private key matches cert" << std::endl;
 }
 
 SSL* initSSLSocket(SSL_CTX* context, int socket) {
-    SSL* SSL = SSL_new(context);
+    SSL* SSLConnect = SSL_new(context);
+    std::cout << "SSLConnect pointer: " << SSLConnect << std::endl;
 
-    SSL_set_fd(SSL, socket);
-    int acceptStatus = SSL_accept(SSL);
-    if (acceptStatus > 0) return SSL;
-    SSL_free(SSL);
+    if (SSL_set_fd(SSLConnect, socket) != 1) {
+        std::cout << "failed to set file descriptor" << std::endl;
+        SSL_free(SSLConnect);
+        exit(1);
+    }
+
+    int acceptStatus = SSL_accept(SSLConnect);
+    std::cout << "SSLConnect pointer: " << SSLConnect << std::endl;
+
+    if (acceptStatus > 0) return SSLConnect;
+    std::cout << "SSLConnect pointer before free: " << SSLConnect << std::endl;
+    SSL_free(SSLConnect);
+    std::cout << "SSL_free called" << std::endl;
     exit(1);   
 }
+
 
 
 // references https://www.geeksforgeeks.org/how-to-read-from-a-file-in-cpp/
@@ -202,7 +215,7 @@ std::string findUserFromFile(std::string userName) {
     std::string foundUser = "";
     bool userFound = false; // bad naming
     for (auto& user : users) {
-        std::cout << user << "\n" << std::endl;
+        // std::cout << user << "\n" << std::endl;
         size_t i = user.find_first_of(":$");
         if (i != std::string::npos && user.substr(0, i) == userName) {
             // std::cout << "User name entered in function: " << userName << std::endl;
@@ -215,7 +228,7 @@ std::string findUserFromFile(std::string userName) {
 
     if (!userFound) return "User not found";
     if (foundUser.empty()) {
-        std::cout << "user empty" << std::endl;
+        // std::cout << "user empty" << std::endl;
         return "User not found";
     }
     return foundUser;
@@ -236,7 +249,7 @@ void createPassFile() {
 
 
 void writeToPassFile(std::string entry) {
-    std::cout << "writing user to file" << std::endl;
+    // std::cout << "writing user to file" << std::endl;
     const std::string dir = ".";
     const std::string path = dir + "/.games_shadow";
 
@@ -317,7 +330,7 @@ std::tuple<std::array<unsigned char, 16>, std::string> genPass() {
             rand = "";
             continue;
         } else {
-            std::cout << rand << std::endl;
+            // std::cout << rand << std::endl;
             return { salt, rand };
         }
     }
@@ -345,7 +358,6 @@ std::array<unsigned char, 32> genPassHash(std::tuple<std::array<unsigned char, 1
 // The password must include at least one uppercase letter (A-Z), at least one lowercase letter (a-z), at
 // least one number (0-9
 std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {   
-    for (auto &val : cmd) std::cout << val << std::endl;
     if (cmd[0] != "USER") return  { false, "" };
     if (!(cmd.size() == 2)) return {false, ""};
     std::string user = cmd[1];
@@ -371,11 +383,7 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
     
         std::array<unsigned char, 32> hash = genPassHash(saltAndPass);
         std::copy(std::begin(hash), std::end(hash), globalTestHash.begin());
-        std::cout << "HASH BEFORE ENCODING PROCESS ";
-        for (const auto& byte : hash) {
-            std::cout << std::hex << static_cast<int>(byte);
-        }
-        std::cout << std::endl;
+    
         // std::cout << "able to produce hash" << std::endl;
 
         std::string modCryptStore;
@@ -384,11 +392,11 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
         modCryptStore += "10000$"; // num iterations
 
         // std::cout << std::get<0>(saltAndPass).size() << std::endl;
-        std::vector<unsigned char> base64Salt(int(4 * ceil(16.0 / 3.0)));
+        std::vector<unsigned char> base64Salt(int(4 * ceil(16.0 / 3.0)) + 1, '\0');
         EVP_EncodeBlock(base64Salt.data(), salt, 16);
         modCryptStore += std::string(reinterpret_cast<char*>(base64Salt.data())) + "$";
 
-        std::vector<unsigned char> base64Hash(int(4 * ceil(32 / 3)));
+        std::vector<unsigned char> base64Hash(int(4 * ceil(32.0 / 3.0)) + 1, '\0');
         EVP_EncodeBlock(base64Hash.data(), hash.data(), 32);
         modCryptStore += std::string(reinterpret_cast<char*>(base64Hash.data()));
 
@@ -399,7 +407,7 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
         writeToPassFile(modCryptStore);
     } 
     
-    return { userExists, password.data() };
+    return { userExists, password };
 }
 
 /*
@@ -468,7 +476,6 @@ std::string validateUser(std::string currentUser, std::string pass) {
     size_t delimAfterPrf = userInfo.find("$", delimAfterUser + 2);
     size_t delimAfterNumIter = userInfo.find("$", delimAfterPrf + 1);
     size_t delimAfterSalt = userInfo.find("$", delimAfterNumIter + 1);
-    size_t delimAfterHash = userInfo.find("$", delimAfterSalt + 1);
 
     std::string prf = userInfo.substr(delimAfterUser + 2, delimAfterPrf - delimAfterUser - 2);
     std::string numIter = userInfo.substr(delimAfterPrf + 1, delimAfterNumIter - delimAfterPrf - 1);
@@ -492,10 +499,10 @@ std::string validateUser(std::string currentUser, std::string pass) {
         std::cout << "HASH had a newline at the end and it was removed." << std::endl;
     }
 
-    std::cout << "HASH AFTER DECODING PROCESS ";
-    for (const auto& byte : decodedHash) {
-        std::cout << std::hex << static_cast<int>(byte);
-    }
+    // std::cout << "HASH AFTER DECODING PROCESS ";
+    // for (const auto& byte : decodedHash) {
+    //     std::cout << std::hex << static_cast<int>(byte);
+    // }
 
     std::array<unsigned char, 32> generatedHash;
     if (!pass.empty() && pass.back() == '\n') {
@@ -523,10 +530,10 @@ std::string validateUser(std::string currentUser, std::string pass) {
 
     if (generatedHash == decodedHash) {
         std::cout << "PASSWORD validated" << std::endl;
-        return "250 SUCCESS: Password validated.";
+        return "210 SUCCESS: Authentication successful";
     } else {
         std::cout << "it doesn't match" << std::endl;
-        return "403 FORBIDDEN: Invalid password.";
+        return "410 FAILED: Authentication failed";
     }
    
     // // good stuff
@@ -650,22 +657,22 @@ std::vector<std::string> splitStr(const std::string& input) {
 * Need to implement better error handling.
 * I thought this was necessary due to a different bug but it wasn't...
 */
-int sendAll(SSL* SSL, std::string message) {
+int sendAll(SSL* SSLConnect, const std::string& message) {
+    std::lock_guard<std::mutex> lock(mtx);
     const char* buf = message.c_str();
-    int len = strlen(buf);
-    int total;
+    int len = message.size();
+    int total = 0;
     int bytesLeft = len;
-    int n;             
-    for (total = 0; total < len; total += n) {
-        n = SSL_write(SSL, buf + total, bytesLeft);
-        // if (n == -1 || n == 0) {
-        //     std::cout << "Error in send from HELP" << std::endl << std::flush;
-        //     break;
-        // }
+
+    while (total < len) {
+        int n = SSL_write(SSLConnect, buf + total, bytesLeft);
+        if (n <= 0) {
+            std::cout << "Error in sendAll" << std::endl;
+            return -1;
+        }
+        total += n;
         bytesLeft -= n;
     }
-
-    if (n == -1) return -1;
     return 0;
 }
 
@@ -692,7 +699,7 @@ std::string singleStrBuilder(std::vector<Game> games, int idx, bool isClientGame
         buildStr += ", # Copies: " + std::to_string(games[idx].copies);
     }
 
-    if (ratings.contains(games[idx].id)) {
+    if (ratings.find(games[idx].id) != ratings.end()) {
         buildStr += ", Rating: " + std::to_string(ratings[games[idx].id]);
     }
 
@@ -838,7 +845,7 @@ std::string buildListStr(std::vector<Game> games, std::vector<std::string> cmd, 
                 buildStr += ", Available: False";
             }
             buildStr += ", # Copies: " + std::to_string(games[i].copies);
-            if (ratings.contains(games[i].id)) {
+            if (ratings.find(games[i].id) != ratings.end()) {
                 buildStr += ", Rating: " + std::to_string(ratings[games[i].id]);
             }
             buildStr += "\n";
@@ -1215,10 +1222,6 @@ int main(int argc, char* argv[]) {
 
     int rv;
 
-    SSL_CTX* context = initSSLContext();
-    initCipherSuites(context);
-    validateCertAndKey(context);
-
     // database
     const std::string DB_NAME = "games.db";
     // vector from the database
@@ -1230,7 +1233,7 @@ int main(int argc, char* argv[]) {
     hints.ai_flags = AI_PASSIVE;
 
     if (argc != 2) {
-        std::cerr << std::format("Usage: {} <config_file>\n", *argv);
+        std::cerr << "Usage: " << argv[0] << " <config_file>\n";
         return 1;
     }
 
@@ -1239,7 +1242,7 @@ int main(int argc, char* argv[]) {
 
     std::filesystem::path configFilePath(configFileName);
     if (!std::filesystem::is_regular_file(configFilePath)) {
-        std::cerr << std::format("Error opening configuration file: {}\n", configFileName);
+        std::cerr << "Error opening configuration file: " << configFileName << "\n";
         return 1;
     }
 
@@ -1260,7 +1263,7 @@ int main(int argc, char* argv[]) {
     }
 
     if ((rv = getaddrinfo(nullptr, port->c_str(), &hints, &servinfo))!= 0) {
-        std::cerr << std::format("getaddrinfo: {}\n", gai_strerror(rv));
+        std::cerr << "getaddrinfo: " << gai_strerror(rv) << "\n";
         return 1;
     }
 
@@ -1307,6 +1310,38 @@ int main(int argc, char* argv[]) {
 
     std::cout << "server: waiting for connections...\n";
 
+    // SSL_CTX* context = initSSLContext();
+    const SSL_METHOD* method = TLS_method();
+    SSL_CTX* context = SSL_CTX_new(method);
+    if (!context) {
+        exit(1);
+    }
+    if (!SSL_CTX_set_min_proto_version(context, TLS1_3_VERSION) || 
+        !SSL_CTX_set_max_proto_version(context, TLS1_3_VERSION)) {
+
+        SSL_CTX_free(context);
+        exit(1);
+    }
+
+    std::cout << "context initialized" << std::endl;
+
+    const char* TLSCiphers = "TLS_AES_256_GCM_SHA384";
+    int setCipherSuites = SSL_CTX_set_ciphersuites(context, TLSCiphers);
+    if (setCipherSuites != 1) exit(1);
+    std::cout << "cipher suite initialized" << std::endl;
+
+    if (SSL_CTX_use_certificate_file(context, "p3server.crt", SSL_FILETYPE_PEM) <= 0 ||
+        SSL_CTX_use_PrivateKey_file(context, "p3server.key", SSL_FILETYPE_PEM) <= 0 ||
+        !SSL_CTX_check_private_key(context)) {
+        SSL_CTX_free(context);
+        exit(1);
+    }
+    std::cout << "Cert and key valid" << std::endl;
+
+    // initCipherSuites(context);
+    // validateCertAndKey(context);
+
+
     while (true) {
         sin_size = sizeof their_addr;
         new_fd = accept(sockfd, (struct sockaddr*)&their_addr, &sin_size);
@@ -1318,9 +1353,36 @@ int main(int argc, char* argv[]) {
         inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr*)&their_addr), s, sizeof s);
         logEvent("Connection from: " + std::string(s));
 
-        // Create a new thread to handle the client communication
-        std::thread clientThread([new_fd, context, s, server_addr, &gamesVec, hostname]() {
-            SSL* SSL = initSSLSocket(context, new_fd);
+
+
+        std::thread clientThread([context, &new_fd, s, server_addr, &gamesVec, hostname]() {
+     
+            // SSL* SSLConnect = initSSLSocket(context, new_fd);
+            SSL* SSLConnect = SSL_new(context);
+            if (!SSLConnect) {
+                std::cerr << "Failed to create SSL object" << std::endl;
+                return;
+            }
+            std::cout << "SSLConnect pointer: " << SSLConnect << std::endl;
+
+            if (SSL_set_fd(SSLConnect, new_fd) != 1) {
+                std::cout << "failed to set file descriptor" << std::endl;
+                SSL_free(SSLConnect);
+                return;
+            }
+
+            int acceptStatus = SSL_accept(SSLConnect);
+            if (acceptStatus <= 0) {
+                std::cout << "SSL_accept failed" << std::endl;
+                ERR_print_errors_fp(stderr);
+                SSL_free(SSLConnect);
+                return;
+            }
+
+            std::cout << "SSLConnect init success" << std::endl;
+
+            
+
             std::array<char, MAXDATASIZE> buf;
             int numbytes;
 
@@ -1348,14 +1410,33 @@ int main(int argc, char* argv[]) {
             // key: Game ID, value: rating
             std::unordered_map<int, int> clientRatings = std::unordered_map<int, int>();
 
+            int passwordAttempts = 0;
+
             while (true) {
-                if ((numbytes = SSL_read(SSL, buf.data(), MAXDATASIZE - 1)) == -1) {
+                if ((numbytes = SSL_read(SSLConnect, buf.data(), MAXDATASIZE - 1)) == -1) {
                     perror("recv");
                     exit(1);
                 } else if (numbytes == 0) {
                     logEvent("Client disconnected: " + std::string(s));
                     break;
                 }
+
+                // sendAll(SSLConnect, "test");
+
+                // if (SSLConnect) {
+                //     std::cout << "freeing SSLConnect" << std::endl;
+                  
+                //     SSL_shutdown(SSLConnect);
+                 
+                //     std::cout << "SSLConnect pointer: " << SSLConnect << std::endl;
+                //     ERR_print_errors_fp(stderr);
+                //     SSL_free(SSLConnect);
+                //     SSLConnect = nullptr;
+                //     std::cout << "free succeeded" << std::endl;
+                // }
+                // else std::cout << "SSLConnect is null" << std::endl;
+                // close(new_fd);
+                // return;
 
                 buf[numbytes] = '\0';
                 std::string receivedMsg(buf.data());
@@ -1365,28 +1446,46 @@ int main(int argc, char* argv[]) {
                 // what even is a switch statement? *jokes*
 
                 if (waitingForPass) {
+                    passwordAttempts ++;
                     if (cmd == "PASS" && clientCmdVec.size() == 2) {
                         std::cout << currentUser << std::endl;
-                        validateUser(currentUser, clientCmdVec[1]);
+                        std::string validateRes = validateUser(currentUser, clientCmdVec[1]);
+                        if (validateRes == "210 SUCCESS: Authentication successful") {
+                            heloInit = true;
+                            waitingForPass = false;
+                            
+                            if (sendAll(SSLConnect, validateRes) == -1) {
+                                perror("send");
+                            }
+                            
+                            continue;
+                        }
+                        else if (validateRes == "410 FAIL: Authentication failed")
+                        if (sendAll(SSLConnect, BAD_SEQ_CODE) == -1) {
+                                perror("send");
+                        }   
                     }
-                    else break;
+                    else sendAll(SSLConnect, "")
+
                 }
-                if (heloInit && cmd == "BYE") {
+                // allow user to run BYE anytime, even during authentication...
+                else if (cmd == "BYE") {
                     // be sure to run a clean up function
                     std::string byeRes = BYE;
 
                     cleanOnBye(gamesVec, clientGames);
-                    if (sendAll(SSL, byeRes) == -1) {
+                    if (sendAll(SSLConnect, byeRes) == -1) {
                         perror("send");
                     }
                     heloInit = false;
                     break;
                 }
-                else if (cmd == "USER") {
+                else if (cmd == "USER" && !heloInit) {
                     // need to return with client addr back to them
+                    
 
                     if (clientCmdVec.size() < 2 || clientCmdVec.size() > 2) {
-                        if (sendAll(SSL, "400 Incorrect number of arguments") == -1) {
+                        if (sendAll(SSLConnect, "400 Incorrect number of arguments") == -1) {
                             perror("send");
                         }
                         continue;
@@ -1395,20 +1494,56 @@ int main(int argc, char* argv[]) {
                     bool userExists;
 
                     std::tuple<bool, std::string> getUserReturn = getUser(clientCmdVec);
+
+                    // sendAll(SSLConnect, "test in USER");
+                    // if (SSLConnect) {
+                    //     std::cout << "freeing SSLConnect" << std::endl;
+                    
+                    //     SSL_shutdown(SSLConnect);
+                    
+                    //     std::cout << "SSLConnect pointer: " << SSLConnect << std::endl;
+                    //     ERR_print_errors_fp(stderr);
+                    //     SSL_free(SSLConnect);
+                    //     SSLConnect = nullptr;
+                    //     std::cout << "free succeeded" << std::endl;
+                    // }
+                    // else std::cout << "SSLConnect is null" << std::endl;
+                    // close(new_fd);
+                    // return;
+
                     userExists = std::get<0>(getUserReturn);
                     password = std::get<1>(getUserReturn);
 
+                    std::cout << password << std::endl;
+
                     if (state != "standard") state = "standard"; // just reinit state if necessary
+
+                    // sendAll(SSLConnect, "test in USER");
+                    // if (SSLConnect) {
+                    //     std::cout << "freeing SSLConnect" << std::endl;
+                    
+                    //     SSL_shutdown(SSLConnect);
+                    
+                    //     std::cout << "SSLConnect pointer: " << SSLConnect << std::endl;
+                    //     ERR_print_errors_fp(stderr);
+                    //     SSL_free(SSLConnect);
+                    //     SSLConnect = nullptr;
+                    //     std::cout << "free succeeded" << std::endl;
+                    // }
+                    // else std::cout << "SSLConnect is null" << std::endl;
+                    // close(new_fd);
+                    // return;
 
                     // user's first time, did not exist in the file
                     if (!userExists && !password.empty()) {
-                        if (sendAll(SSL, "Your new password is: " + password) == -1) {
+                        std::string passRes = "Your new password is " + password;
+                        if (sendAll(SSLConnect, passRes) == -1) {
                             perror("send");
                         }
-                        // waitingForPass = false; // Reset state to allow further commands
-                        continue; // Continue processing the next command
+                      
+                        break; 
                     } else if (userExists) {
-                        if (sendAll(SSL, "300 Password required") == -1) {
+                        if (sendAll(SSLConnect, "300 Password required") == -1) {
                             perror("send");
                         }
                         waitingForPass = true;
@@ -1416,7 +1551,6 @@ int main(int argc, char* argv[]) {
                         // std::cout << clientCmdVec[1].size() << std::endl;
                         currentUser = clientCmdVec[1];
                         // wait for PASS command then do authentication protocol
-                        // heloInit = true;
                     }
                     
                 } 
@@ -1425,26 +1559,26 @@ int main(int argc, char* argv[]) {
                     std::string helpRes;
                     helpRes = helpStr(state);
 
-                    sendAll(SSL, helpRes);
+                    sendAll(SSLConnect, helpRes);
                 }
                 else if (heloInit && cmd == "BROWSE" && clientCmdVec.size() == 1) {
                     state = "browse";
                     std::string browseRes = "210 Switched to BROWSE mode.";
-                    if (sendAll(SSL, browseRes) == -1) {
+                    if (sendAll(SSLConnect, browseRes) == -1) {
                         perror("send");
                     }
                 }
                 else if (heloInit && cmd == "RENT" && clientCmdVec.size() == 1) {
                     state = "rent";
                     std::string rentRes = "220 Switched to RENT Mode.";
-                    if (sendAll(SSL, rentRes) == -1) {
+                    if (sendAll(SSLConnect, rentRes) == -1) {
                         perror("send");
                     }
                 }
                 else if (heloInit && cmd == "MYGAMES" && clientCmdVec.size() == 1) {
                     state = "mygames";
                     std::string myGamesRes = "230 Switched to MYGAMES Mode.";
-                    if (sendAll(SSL, myGamesRes) == -1) {
+                    if (sendAll(SSLConnect, myGamesRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1464,7 +1598,7 @@ int main(int argc, char* argv[]) {
                         searchRes = BAD_SEQ_CODE;
                     }
 
-                    if (sendAll(SSL, searchRes) == -1) {
+                    if (sendAll(SSLConnect, searchRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1483,7 +1617,7 @@ int main(int argc, char* argv[]) {
                     else {
                         searchRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(SSL, searchRes) == -1) {
+                    if (sendAll(SSLConnect, searchRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1501,7 +1635,7 @@ int main(int argc, char* argv[]) {
                     else {
                         showRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(SSL, showRes) == -1) {
+                    if (sendAll(SSLConnect, showRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1515,7 +1649,7 @@ int main(int argc, char* argv[]) {
                     else {
                         checkRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(SSL, checkRes) == -1) {
+                    if (sendAll(SSLConnect, checkRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1530,7 +1664,7 @@ int main(int argc, char* argv[]) {
                     else {
                         returnRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(SSL, returnRes) == -1) {
+                    if (sendAll(SSLConnect, returnRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1543,7 +1677,7 @@ int main(int argc, char* argv[]) {
                     else {
                         historyRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(SSL, historyRes) == -1) {
+                    if (sendAll(SSLConnect, historyRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1556,7 +1690,7 @@ int main(int argc, char* argv[]) {
                     else {
                         searchRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(SSL, searchRes) == -1) {
+                    if (sendAll(SSLConnect, searchRes) == -1) {
                         perror("send");
                     }
                 }
@@ -1569,30 +1703,45 @@ int main(int argc, char* argv[]) {
                     else {
                         searchRes = BAD_SEQ_CODE;
                     }
-                    if (sendAll(SSL, searchRes) == -1) {
+                    if (sendAll(SSLConnect, searchRes) == -1) {
                         perror("send");
                     }
                 }
                 else {
                     std::string badReqRes = "400 BAD REQUEST";
-                    if (sendAll(SSL, badReqRes.c_str()) == -1) {
+                    if (sendAll(SSLConnect, badReqRes.c_str()) == -1) {
                         std::string internalError = "500 INTERNAL SERVER ERROR";
                         // this code is so bad...
-                        if (sendAll(SSL, internalError.c_str()) == -1) {
+                        if (sendAll(SSLConnect, internalError.c_str()) == -1) {
                             perror("send");
                         }
                     }
                 }
             }
+            
+            {
+            std::lock_guard<std::mutex> lock(mtx); 
 
-            SSL_shutdown(SSL);
-            SSL_free(SSL);
-            close(new_fd);
+                if (SSLConnect) {
+                    std::cout << "freeing SSLConnect" << std::endl;
+                  
+                    SSL_shutdown(SSLConnect);
+                 
+                    std::cout << "SSLConnect pointer: " << SSLConnect << std::endl;
+                    ERR_print_errors_fp(stderr);
+                    SSL_free(SSLConnect);
+                    SSLConnect = nullptr;
+                    std::cout << "free succeeded" << std::endl;
+                }
+                else std::cout << "SSLConnect is null" << std::endl;
+                close(new_fd);
+                return;
+            }
         });
         clientThread.detach();
     }
-
     SSL_CTX_free(context);
     context = nullptr;
+    
     return 0;
 }

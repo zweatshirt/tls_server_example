@@ -61,6 +61,8 @@
         "typeinfo": "cpp",
         "variant": "cpp",
         "format": "cpp",
-        "text_encoding": "cpp"
+        "text_encoding": "cpp",
+        "condition_variable": "cpp",
+        "mutex": "cpp"
     }
 }
