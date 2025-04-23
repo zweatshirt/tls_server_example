@@ -1413,14 +1413,16 @@ int main(int argc, char* argv[]) {
             int passwordAttempts = 0;
 
             while (true) {
-                if ((numbytes = SSL_read(SSLConnect, buf.data(), MAXDATASIZE - 1)) == -1) {
-                    perror("recv");
-                    exit(1);
-                } else if (numbytes == 0) {
-                    logEvent("Client disconnected: " + std::string(s));
-                    break;
+                {
+                    std::lock_guard<std::mutex> lock(mtx);
+                    if ((numbytes = SSL_read(SSLConnect, buf.data(), MAXDATASIZE - 1)) == -1) {
+                        perror("recv");
+                        exit(1);
+                    } else if (numbytes == 0) {
+                        logEvent("Client disconnected: " + std::string(s));
+                        break;
+                    }
                 }
-
                 // sendAll(SSLConnect, "test");
 
                 // if (SSLConnect) {
@@ -1549,11 +1551,10 @@ int main(int argc, char* argv[]) {
 
                     // user's first time, did not exist in the file
                     if (!userExists && !password.empty()) {
-                        std::string passRes = "Your new password is " + password;
+                        std::string passRes = "410 SUCCESS: User account generated. Your new password is " + password;
                         if (sendAll(SSLConnect, passRes) == -1) {
                             perror("send");
                         }
-                      
                         break; 
                     } else if (userExists) {
                         if (sendAll(SSLConnect, "300 Password required") == -1) {
@@ -1616,7 +1617,7 @@ int main(int argc, char* argv[]) {
                     }
                 }
                 else if (heloInit && cmd == "LIST") { // Need to finish
-                    // user can initiate 
+                    // user can initiate
                     std::string searchRes;
                     if (state == "browse") { // search is only valid in browse
                         searchRes = buildListStr(gamesVec, clientCmdVec, clientRatings);
