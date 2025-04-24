@@ -1658,7 +1658,8 @@ int main(int argc, char* argv[]) {
                     if (state == "rent") { // search is only valid in browse
                         checkRes = checkoutGame(gamesVec, clientCmdVec, clientGames);
                         if (checkRes == "Invalid") checkRes = BAD_SEQ_CODE;
-                        // if (searchRes == "Empty") searchRes = "404 Game not checked out by client."
+                        if (checkRes == "Empty") checkRes = "404 Game could not be found.";
+                        if (checkRes.empty()) checkRes = "404";
                     }
                     else {
                         checkRes = BAD_SEQ_CODE;
