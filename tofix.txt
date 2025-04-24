@@ -1,0 +1,37 @@
+- Files in the tarball had executable bit (x) set, which were misidentified for executables and were deleted during testing bootstrapping. Please create tarballs with ONLY required files and do not attach any executables. Failure to produce clean tarballs will result in penalties in future.
+
+- Command and Reply Code Implementation
+-- HELP does not report a response code.
+-- SEARCH not able to match extact titles.
+-- SHOW does not appear to report a response code either.
+--
+
+- Implementation Completeness
+-- LIST returns the same output irrespective of the filter used.
+-- RECOMMEND w/ filter option failed to generate the expected output.
+
+- Implementation Accuracy
+-- Mismatches in response codes or wrong logic for SEARCH when titles don't exists in the catalog.
+--
+
+- Follows Protocol Order
+-- RESULTS affected by errors in basic implementations
+
+- Handle Out-of-Order Sequences
+-- Minor mismatches in response codes
+
+- Catalog Interaction
+-- CHECKOUT on non existing titles returns no response or Empty
+-- RESULTS affected by errors in basic implementations
+-- SEARCH not able to match exact titles and/or titles with special characters.
+-- SEARCH fails on partial tests.
+
+- Error Checking and Input Validation
+-- RESULTS affected by errors in basic implementations.
+-- Error handling and input validation needs improvement. Inputs with spaces, in particular, seems to cause errors.
+--
+
+
+Overall good work. There are several commands without response codes. Couple that with response code mismatches causes quite a few tests to report FAIL. SEARCH is not able to match exact titles, partial queries, and titles with special characters. Having said that, there are a lot of positives in this implementation. Keep up the good work.
+
+See testing.log for testing sequences.

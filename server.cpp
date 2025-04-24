@@ -737,9 +737,16 @@ std::string buildGameSearchStr(std::vector<Game> games, std::vector<std::string>
     //     buildStr = strBuilder(games);
     // }
     // user did not specify a filter
-    if (cmd.size() != 3) {
+    if (!(cmd.size() >= 3)) {
         return invalid;
     }  
+    std::string toFind;
+    for (size_t i = 2; i < cmd.size(); ++i) {
+        toFind += cmd[i];
+        if (i != cmd.size() - 1) {
+            toFind += " ";
+        }
+    }
 
     // Better than a long if statement? Probably not.
     std::vector<std::string> filters = { "title", "platform", "genre", "rating" };
@@ -754,20 +761,19 @@ std::string buildGameSearchStr(std::vector<Game> games, std::vector<std::string>
     }
     
     for (size_t i = 0; i < games.size(); i++) {
-        if (filter == "title" && cmd[2] == games[i].title) {
+        if (filter == "title" && games[i].title.find(toFind) != std::string::npos) {
             buildStr += singleStrBuilder(games, i);
         }
-        if (filter == "platform" && cmd[2] == games[i].platform) {
+        else if (filter == "platform" && games[i].platform.find(toFind) != std::string::npos) {
             buildStr += singleStrBuilder(games, i);
         }
-        else if (filter == "genre" && cmd[2] == games[i].genre) {
+        else if (filter == "genre" && games[i].genre.find(toFind) != std::string::npos) {
             buildStr += singleStrBuilder(games, i);
         }
-        // ! IMPLEMENT
         else if (filter == "rating") {
             int ratingIn;
             try {
-                ratingIn = std::stoi(cmd[2]);
+                ratingIn = std::stoi(toFind);
             } 
             catch (const std::invalid_argument& e) {
                 return invalid;
@@ -775,7 +781,7 @@ std::string buildGameSearchStr(std::vector<Game> games, std::vector<std::string>
             catch (const std::out_of_range& e) {
                 return invalid;
             }
-            if (ratingIn == ratings[games[i].id]) {
+            if (std::to_string(ratings[games[i].id]).find(toFind) != std::string::npos) {
                 buildStr += singleStrBuilder(games, i);
             }
         }
