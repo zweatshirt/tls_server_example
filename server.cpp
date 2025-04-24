@@ -1700,7 +1700,7 @@ int main(int argc, char* argv[]) {
                 std::cout << "freeing SSLConnect" << std::endl;
 
                 SSL_shutdown(SSLConnect);
-            
+        
                 std::cout << "SSLConnect pointer: " << SSLConnect << std::endl;
                 ERR_print_errors_fp(stderr);
                 SSL_free(SSLConnect);
