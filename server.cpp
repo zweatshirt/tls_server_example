@@ -775,13 +775,13 @@ std::string buildGameSearchStr(std::vector<Game> games, std::vector<std::string>
             try {
                 ratingIn = std::stoi(toFind);
             } 
-            catch (const std::invalid_argument& e) {
+            catch (const std::invalid_argument& error) {
                 return invalid;
             } 
-            catch (const std::out_of_range& e) {
+            catch (const std::out_of_range& error) {
                 return invalid;
             }
-            if (std::to_string(ratings[games[i].id]).find(toFind) != std::string::npos) {
+            if (std::to_string(ratings[games[i].id]).find(ratingIn) != std::string::npos) {
                 buildStr += singleStrBuilder(games, i);
             }
         }
