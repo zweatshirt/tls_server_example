@@ -1,10 +1,10 @@
 /*
  * P1 SAMPLE SERVER
  * ---------------
- * Author: Thoshitha Gamage
- * Date: 01/29/2025
+ * Author: Zachery Linscott
+ * Date: 05/2025
  * License: MIT License
- * Description: This is a sample code for CS447 Spring 2025 P1 server code.
+ * Description: This is a class project on TLS integration.
  */
 
 #include <iostream>
