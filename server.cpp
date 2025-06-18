@@ -117,9 +117,6 @@
 * multi-threading techniques or the fork() system call.
 */
 
-
-// !Implement Mutex locking
-// I am pretty sure this works, but I honestly don't fully understand Mutex
 std::mutex mtx;
 std::array<unsigned char, 16> globalTestSalt; // this is for testing...
 std::array<unsigned char, 32> globalTestHash; // this is for testing...
@@ -127,9 +124,6 @@ std::array<unsigned char, 32> globalTestHash; // this is for testing...
 bool srandInit = false;
 
 SSL_CTX* initSSLContext() {
-    // SSL_library_init();
-    // OpenSSL_add_ssl_algorithms();
-    // SSL_load_error_strings();
     const SSL_METHOD* method = TLS_method();
     SSL_CTX* context = SSL_CTX_new(method);
     if (!context) {
@@ -141,8 +135,6 @@ SSL_CTX* initSSLContext() {
         SSL_CTX_free(context);
         exit(1);
     }
-
-    // std::cout << "context initialized" << std::endl;
     return context;
 }
 
@@ -160,7 +152,6 @@ void validateCertAndKey(SSL_CTX* context) {
         SSL_CTX_free(context);
         exit(1);
     }
-    // std::cout << "private key matches cert" << std::endl;
 }
 
 SSL* initSSLSocket(SSL_CTX* context, int socket) {
@@ -187,7 +178,6 @@ SSL* initSSLSocket(SSL_CTX* context, int socket) {
 
 // references https://www.geeksforgeeks.org/how-to-read-from-a-file-in-cpp/
 std::vector<std::string> readPassFile(const std::filesystem::path &path) {
-    // std::lock_guard<std::mutex> lock(mtx);
     std::ifstream file(path);
 
     std::vector<std::string> text;
@@ -205,31 +195,25 @@ std::string findUserFromFile(std::string userName) {
     const std::string dir = ".";
     const std::string path = dir + "/.games_shadow";
     std::vector<std::string> users = readPassFile(path);
-
-    // std::cout << "Users in file: " << std::endl;
-    // for (auto &user: users) {
-    //     std::cout << user << std::endl;
-    // }
-
+    
     if (users.empty()) return "User not found";
 
     std::string foundUser = "";
-    bool userFound = false; // bad naming
+    bool userFound = false; 
     for (auto& user : users) {
-        // std::cout << user << "\n" << std::endl;
+ ;
         size_t i = user.find_first_of(":$");
         if (i != std::string::npos && user.substr(0, i) == userName) {
-            // std::cout << "User name entered in function: " << userName << std::endl;
             foundUser = user;
             userFound = true;
-            // std::cout << "User was found" << std::endl;
+   
             break;
         }
     }
 
     if (!userFound) return "User not found";
     if (foundUser.empty()) {
-        // std::cout << "user empty" << std::endl;
+
         return "User not found";
     }
     return foundUser;
@@ -263,31 +247,21 @@ void writeToPassFile(std::string entry) {
 }
 
 
-// taken from my project 2 and extended upon
-// convert password strength check to is own function
-// implement CSPRNG
+/* 
+* taken from my project 2 and extended upon
+* convert password strength check to is own function
+* implement CSPRNG
+*/
 std::tuple<std::array<unsigned char, 16>, std::string> genPass() {
     std::string chars;
     size_t stringLength;
 
     chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*_-+=."; 
     stringLength = 8;
-
-    // use for CSPRNG
-    // std::uint_least32_t seed;    
-    // sysrandom(&seed, sizeof(seed));
-    // std::mt19937 gen(seed);
     RAND_poll();
     std::array<unsigned char, 16> salt;
     RAND_bytes(salt.data(), salt.size());
-
-
-    // deprecating, does not conform to CSPRNG expectation
-    // std::string rand;
-    // if (!srandInit) {
-    //     std::srand(std::time(0));
-    //     srandInit = true;
-    // }
+    
     std::string rand;
 
     bool containsUpper = false;
@@ -332,7 +306,6 @@ std::tuple<std::array<unsigned char, 16>, std::string> genPass() {
             rand = "";
             continue;
         } else {
-            // std::cout << rand << std::endl;
             return { salt, rand };
         }
     }
@@ -340,7 +313,6 @@ std::tuple<std::array<unsigned char, 16>, std::string> genPass() {
 
 std::array<unsigned char, 32> genPassHash(std::tuple<std::array<unsigned char, 16>, std::string> saltAndPass) {
     const int iters = 10000;
-    // const int keySize = 32;
     std::array<unsigned char, 32> hash;
 
     PKCS5_PBKDF2_HMAC(
@@ -357,8 +329,10 @@ std::array<unsigned char, 32> genPassHash(std::tuple<std::array<unsigned char, 1
     return hash;
 }
 
-// The password must include at least one uppercase letter (A-Z), at least one lowercase letter (a-z), at
-// least one number (0-9
+/*
+* The password must include at least one uppercase letter (A-Z), at least one lowercase letter (a-z), at
+* least one number (0-9
+*/
 std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {   
     
     if (cmd[0] != "USER") return  { false, "" };
@@ -372,7 +346,6 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
     std::lock_guard<std::mutex> lock(mtx);
     std::string userFromFile = findUserFromFile(user);
     if (userFromFile != "User not found") userExists = true;
-    // std::cout << "3" << std::endl;
 
     std::tuple<std::array<unsigned char, 16>, std::string> saltAndPass;
     if (!userExists) {
@@ -382,20 +355,15 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
         std::copy(salt, salt + globalTestSalt.size(), globalTestSalt.begin());
         
         password = std::get<1>(saltAndPass);
-        // std::cout << "password: " << password << std::endl;
-        // std::cout << "Able to get salt and pass" << std::endl;
     
         std::array<unsigned char, 32> hash = genPassHash(saltAndPass);
         std::copy(std::begin(hash), std::end(hash), globalTestHash.begin());
-    
-        // std::cout << "able to produce hash" << std::endl;
 
         std::string modCryptStore;
         modCryptStore += user + ":$"; // username
         modCryptStore += "pkbdf2-sha256$"; // PRF used
         modCryptStore += "10000$"; // num iterations
 
-        // std::cout << std::get<0>(saltAndPass).size() << std::endl;
         std::vector<unsigned char> base64Salt(int(4 * ceil(16.0 / 3.0)) + 1, '\0');
         EVP_EncodeBlock(base64Salt.data(), salt, 16);
         modCryptStore += std::string(reinterpret_cast<char*>(base64Salt.data())) + "$";
@@ -404,8 +372,6 @@ std::tuple<bool, std::string> getUser(std::vector<std::string> cmd) {
         EVP_EncodeBlock(base64Hash.data(), hash.data(), 32);
         modCryptStore += std::string(reinterpret_cast<char*>(base64Hash.data()));
         
-
-        std::cout << "about to write to pass file" << std::endl;
         writeToPassFile(modCryptStore);
     } 
     
@@ -435,16 +401,6 @@ std::array<unsigned char, 16> EVPDecodeSalt(std::vector<unsigned char> &base64Sa
     std::array<unsigned char, 16> saltArr;
     std::copy(decodedSalt.begin(), decodedSalt.end(), saltArr.begin());
     return saltArr;
-    // std::cout << base64Salt.size() << std::endl; // size: consistently 24
-    // std::cout << decodedSalt.size() << std::endl; // size: consistently 16
-    // if (std::equal(std::get<0>(saltAndPass).begin(), std::get<0>(saltAndPass).end(), decodedSalt.begin()))
-    // {
-    //     std::cout << "decoded salt matches" << std::endl;
-    // }
-    // else
-    // {
-    //     std::cout << "decoded salt does not match" << std::endl;
-    // }
 }
 
 std::array<unsigned char, 32> EVPDecodeHash(std::vector<unsigned char> &base64Hash) {
@@ -452,17 +408,12 @@ std::array<unsigned char, 32> EVPDecodeHash(std::vector<unsigned char> &base64Ha
     EVP_DecodeInit(context);
     std::vector<unsigned char> decodedHash(32);
     int decodeLength = 0;
-    // int finalDecodeLength = 0;
 
     EVP_DecodeUpdate(context, decodedHash.data(), &decodeLength, base64Hash.data(), base64Hash.size());
-    // EVP_DecodeFinal(context, decodedSalt.data() + decodeLength, &finalDecodeLength); // may not be necessary
 
-    // std::cout << "decode length: " << decodeLength << " finalDecodeLength: " << finalDecodeLength << std::endl;
-    // decodeLength += finalDecodeLength;
     decodedHash.resize(decodeLength);
     EVP_ENCODE_CTX_free(context);
 
-    // mostly due to my own laziness
     std::array<unsigned char, 32> hashArr;
     std::copy(decodedHash.begin(), decodedHash.end(), hashArr.begin());
     return hashArr;
@@ -471,11 +422,9 @@ std::array<unsigned char, 32> EVPDecodeHash(std::vector<unsigned char> &base64Ha
 
 std::string validateUser(std::string currentUser, std::string pass) {
     std::lock_guard<std::mutex> lock(mtx);
-    // std::cout << "Is user empty? " << currentUser.empty() << std::endl;
     std::cout << "about to find user from file" << std::endl;
     std::string userInfo = findUserFromFile(currentUser);
 
-    // std::cout << "User found: " << userInfo << std::endl;
     size_t delimAfterUser = userInfo.find(":$");
     size_t delimAfterPrf = userInfo.find("$", delimAfterUser + 2);
     size_t delimAfterNumIter = userInfo.find("$", delimAfterPrf + 1);
@@ -486,15 +435,9 @@ std::string validateUser(std::string currentUser, std::string pass) {
     std::string salt = userInfo.substr(delimAfterNumIter + 1, delimAfterSalt - delimAfterNumIter - 1);
     std::string hash = userInfo.substr(delimAfterSalt + 1, userInfo.size() - 2);
 
-    std::cout << "PRF: " << prf << std::endl;
-    std::cout << "NUM ITER: " << numIter << std::endl;
-    std::cout << salt << std::endl;
-
-    std::cout << "SALT BEFORE DECODE " << salt << std::endl;
     std::vector<unsigned char> base64Salt(salt.begin(), salt.end());
     std::array<unsigned char, 16> decodedSalt = EVPDecodeSalt(base64Salt);
 
-    std::cout << "HASH BEFORE DECODE " << hash << std::endl;
     std::vector<unsigned char> base64Hash(hash.begin(), hash.end());
     std::array<unsigned char, 32> decodedHash = EVPDecodeHash(base64Hash);
 
@@ -503,17 +446,11 @@ std::string validateUser(std::string currentUser, std::string pass) {
         std::cout << "HASH had a newline at the end and it was removed." << std::endl;
     }
 
-    // std::cout << "HASH AFTER DECODING PROCESS ";
-    // for (const auto& byte : decodedHash) {
-    //     std::cout << std::hex << static_cast<int>(byte);
-    // }
-
     std::array<unsigned char, 32> generatedHash;
     if (!pass.empty() && pass.back() == '\n') {
         pass.pop_back();
         std::cout << "PASS had a newline at the end and it was removed." << std::endl;
     }
-    std::cout << "PASS ENTERED " << pass << std::endl;
 
     PKCS5_PBKDF2_HMAC(
         pass.c_str(),
@@ -529,8 +466,6 @@ std::string validateUser(std::string currentUser, std::string pass) {
     for (const auto& byte : generatedHash) {
         std::cout << std::hex << static_cast<int>(byte);
     }
-    std::cout << std::endl;
-
 
     if (generatedHash == decodedHash) {
         std::cout << "PASSWORD validated" << std::endl;
@@ -539,19 +474,6 @@ std::string validateUser(std::string currentUser, std::string pass) {
         std::cout << "it doesn't match" << std::endl;
         return "410 FAILED: Authentication failed";
     }
-   
-    // // good stuff
-    // // if (decodedSalt == globalTestSalt) {
-    // //     std::cout << "SALT CORRECTLY DECODED" << std::endl;
-    // // }
-    // if (decodedHash == globalTestHash) {
-    //     std::cout << "HASH CORRECTLY DECODED" << std::endl;
-    // }
-
-
-   
-
-    // return "Yes";
 }
 
 
@@ -736,11 +658,6 @@ std::string buildGameSearchStr(std::vector<Game> games, std::vector<std::string>
     std::string empty = "Empty";
     // want to check user is searching with a valid filter
     std::string filter = "";
-    // // default option: no filter
-    // if (cmd.size() == 1) {
-    //     buildStr = strBuilder(games);
-    // }
-    // user did not specify a filter
     if (!(cmd.size() >= 3)) {
         return invalid;
     }  
@@ -900,7 +817,6 @@ std::string buildShowStr(std::vector<Game> games, std::vector<std::string> cmd) 
             return invalid;
         }
         
-        // idk how vectors work in C++. I feel like this is not ideal
         for (size_t i = 0; i < games.size(); i++) {
             if (id == games[i].id) {
                 buildStr += singleStrBuilder(games, i); // slow probably
@@ -1003,9 +919,7 @@ std::string returnGame(std::vector<Game>& games, std::vector<std::string> cmd, s
     std::string invalid = "Invalid";
     std::string empty = "Empty";
     std::string buildStr = "";
-
-    // may be editing the games vector.
-    // probably could've done this later in the function.
+    
     std::lock_guard<std::mutex> lock(mtx);
 
     int id;
@@ -1346,11 +1260,6 @@ int main(int argc, char* argv[]) {
         SSL_CTX_free(context);
         exit(1);
     }
-    // std::cout << "Cert and key valid" << std::endl;
-
-    // initCipherSuites(context);
-    // validateCertAndKey(context);
-
 
     while (true) {
         sin_size = sizeof their_addr;
